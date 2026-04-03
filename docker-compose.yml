@@ -1,0 +1,19 @@
+services:
+  leadjin:
+    build: .
+    container_name: leadjin
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_PATH: /data/leadjin.db
+    ports:
+      - "3001:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - leadjin_data:/data
+
+volumes:
+  leadjin_data:

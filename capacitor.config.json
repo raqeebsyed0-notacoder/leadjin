@@ -1,0 +1,13 @@
+{
+  "appId": "com.leadjin.app",
+  "appName": "LeadJin",
+  "webDir": "dist",
+  "server": {
+    "url": "http://192.168.1.18:3001",
+    "cleartext": true,
+    "androidScheme": "http"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
