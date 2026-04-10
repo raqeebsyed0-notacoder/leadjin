@@ -29,6 +29,7 @@ import { createCompleteJinRouter } from './src/services/jinCompleteRoutes.js';
 import { huntExecutives } from './src/services/linkedinHunter.js';
 import { tripleVerify } from './src/services/sovereignVerifier.js';
 import { craftOutreach, type LeadProfile, type OutreachContext } from './src/services/visionStrategist.js';
+import { ProtocolManager, type ClassifyOptions } from './src/services/protocolManager.js';
 dotenv.config();
 
 // --- FOUNDER MODE Configuration ---
@@ -5106,6 +5107,79 @@ app.post("/api/signals/:id/dismiss", (req, res) => {
 
   db.prepare("UPDATE intent_signals SET dismissed = 1 WHERE id = ?").run(Number(id));
   res.json({ ok: true });
+});
+
+// --- Protocol Manager: Reply Classification ---
+
+// POST /api/classify-reply — Classify email reply and generate response
+app.post("/api/classify-reply", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+
+  const { emailBody, originalOutreach, options } = req.body;
+
+  // Validate required fields
+  if (!emailBody || typeof emailBody !== 'string') {
+    return res.status(400).json({ error: "emailBody is required" });
+  }
+  if (!originalOutreach || typeof originalOutreach !== 'string') {
+    return res.status(400).json({ error: "originalOutreach is required" });
+  }
+
+  // Get API key (user-specific or system)
+  const apiKeyRow = db.prepare("SELECT gemini_api_key FROM user_settings WHERE user_id = ?").get(user.id) as any;
+  const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    return res.status(400).json({ error: "Gemini API key required. Please configure in settings." });
+  }
+
+  // Get user info for context
+  const userInfo = db.prepare("SELECT company_name, full_name FROM users WHERE id = ?").get(user.id) as any;
+  const classifyOptions: ClassifyOptions = {
+    meetingLinkPlaceholder: options?.meetingLinkPlaceholder || '[MEETING_LINK]',
+    userCompanyName: options?.userCompanyName || userInfo?.company_name || 'Our Company',
+    userName: options?.userName || userInfo?.full_name || 'The Team',
+    userServices: options?.userServices || 'our services'
+  };
+
+  try {
+    const protocolManager = new ProtocolManager(apiKey);
+    const result = await protocolManager.classifyReply(emailBody, originalOutreach, classifyOptions);
+
+    // Log the classification for analytics
+    console.log(`[ProtocolManager] Reply classified as ${result.category} with ${result.confidence}% confidence for user ${user.id}`);
+
+    // If REFERRAL with extracted contact, optionally add to pipeline
+    if (result.category === 'REFERRAL' && result.extractedData?.referredContact?.email) {
+      const referred = result.extractedData.referredContact;
+      // Return hint that caller can add to pipeline
+      (result as any).actions = {
+        canAddReferralToPipeline: true,
+        referredContact: referred
+      };
+    }
+
+    // If OOO with return date, note the scheduled resend
+    if (result.category === 'OOO' && result.extractedData?.scheduledResendDate) {
+      (result as any).actions = {
+        ...(result as any).actions,
+        scheduleResend: true,
+        resendDate: result.extractedData.scheduledResendDate
+      };
+    }
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('[ProtocolManager] Classification error:', error.message);
+    res.status(500).json({ 
+      error: "Failed to classify reply", 
+      message: error.message,
+      category: 'NOT_INTERESTED',
+      confidence: 0,
+      suggestedResponse: 'Unable to classify - manual review required'
+    });
+  }
 });
 
 // --- Intent Signals Background Monitor (every 6 hours) ---
