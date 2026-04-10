@@ -25,6 +25,8 @@ import { initPreCrawlTables, runPreCrawlBatch, getPreCrawlStats, lookupCompany, 
 import { initEnrichmentTables } from './src/services/enrichmentCache.js';
 import { whatsappService } from './src/services/whatsappService.js';
 import { intentSignalService } from './src/services/intentSignals.js';
+import { createCompleteJinRouter } from './src/services/jinCompleteRoutes.js';
+import { huntExecutives } from './src/services/linkedinHunter.js';
 dotenv.config();
 
 // --- FOUNDER MODE Configuration ---
@@ -568,6 +570,8 @@ initPreCrawlTables(db);
 // Enrichment cache tables
 initEnrichmentTables(db);
 
+
+
 // Wire DB into enrichment engine
 setDatabase(db);
 
@@ -1090,6 +1094,9 @@ const clearSessionCache = (token: string) => {
   sessionCache.delete(token);
 };
 
+// --- Jin AI Employee Routes (All Modules) ---
+app.use('/api/jin', createCompleteJinRouter(db, getUserFromTokenCached));
+
 // Shared admin guard helper - requires BOTH admin secret AND valid user session with is_admin flag
 const requireAdmin = (req: express.Request, res: express.Response): boolean => {
   const adminSecret = process.env.LEADJIN_ADMIN_SECRET;
@@ -1567,45 +1574,58 @@ If no LinkedIn profile found, return NULL.`;
 
 // Task 1E: Data-Driven Lead Score Recalculation
 function recalculateLeadScore(lead: any): { score: number, breakdown: object } {
-  const breakdown = {
+  const breakdown: any = {
     title_match: lead.score_breakdown?.title_match || 0,
     company_size: lead.score_breakdown?.company_size || 0,
     industry_fit: lead.score_breakdown?.industry_fit || 0,
     geography: lead.score_breakdown?.geography || 0,
     pain_signals: 0,
-    engagement: 0
+    engagement: 0,
+    vision_2030: 0,
+    intent_signals: 0,
   };
-  
-  // pain_signals: 4 pts per signal in lead.pain_signals (max 20)
+
+  // pain_signals: 4 pts per signal (max 16)
   if (lead.pain_signals && Array.isArray(lead.pain_signals)) {
-    breakdown.pain_signals = Math.min(lead.pain_signals.length * 4, 20);
+    breakdown.pain_signals = Math.min(lead.pain_signals.length * 4, 16);
   }
-  
-  // engagement: based on verifiable signals
-  // +5 engagement if website_verified
-  if (lead.website_verified) {
-    breakdown.engagement += 5;
+
+  // engagement: based on verifiable signals (max 15)
+  if (lead.website_verified) breakdown.engagement += 5;
+  if (lead.email_verified === true || lead.email_verified === 1) breakdown.engagement += 5;
+  if (lead.linkedin && lead.linkedin.startsWith('http')) breakdown.engagement += 5;
+
+  // Vision 2030 alignment: strong signal for KSA leads (max 20)
+  if (lead.vision_2030_score && typeof lead.vision_2030_score === 'number') {
+    breakdown.vision_2030 = Math.round((lead.vision_2030_score / 100) * 20);
   }
-  // +5 engagement if email_verified (true verification, not just guessed)
-  if (lead.email_verified === true || lead.email_verified === 1) {
-    breakdown.engagement += 5;
+
+  // Intent signals from DB: high-confidence signals boost score (max 15)
+  if (lead.lead_id) {
+    try {
+      const signalRows = (db as any).prepare(
+        "SELECT confidence FROM intent_signals WHERE lead_id = ? AND confidence >= 70"
+      ).all(lead.lead_id) as { confidence: number }[];
+      if (signalRows.length > 0) {
+        breakdown.intent_signals = Math.min(signalRows.length * 3, 15);
+      }
+    } catch {
+      // intent_signals table may not exist yet — silently skip
+    }
   }
-  // +5 engagement if linkedin exists and not empty
-  if (lead.linkedin && lead.linkedin.startsWith('http')) {
-    breakdown.engagement += 5;
-  }
-  
-  // Calculate total score (max 100)
+
   const score = Math.min(
-    breakdown.title_match + 
-    breakdown.company_size + 
-    breakdown.industry_fit + 
-    breakdown.geography + 
-    breakdown.pain_signals + 
-    breakdown.engagement,
+    breakdown.title_match +
+    breakdown.company_size +
+    breakdown.industry_fit +
+    breakdown.geography +
+    breakdown.pain_signals +
+    breakdown.engagement +
+    breakdown.vision_2030 +
+    breakdown.intent_signals,
     100
   );
-  
+
   return { score, breakdown };
 }
 
@@ -2816,6 +2836,36 @@ app.post("/api/leads/recalculate-scores", (req, res) => {
   });
   
   res.json({ results });
+});
+
+// --- LeadJin Hunter Module — Strategic Entity Discovery ---
+// POST /api/hunt - Discover executives via LinkedIn intelligence
+app.post("/api/hunt", async (req, res) => {
+  const { domain, linkedinCookie, maxExecutives } = req.body;
+  
+  if (!domain || typeof domain !== "string") {
+    return res.status(400).json({ error: "domain is required (e.g., retal.com.sa)" });
+  }
+  
+  // Validate domain format
+  const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*(.[a-zA-Z0-9][a-zA-Z0-9-]*)+$/;
+  if (!domainRegex.test(domain)) {
+    return res.status(400).json({ error: "Invalid domain format" });
+  }
+  
+  console.log(`[API/Hunt] Strategic entity hunt requested for: ${domain}`);
+  
+  try {
+    const result = await huntExecutives(domain, linkedinCookie, maxExecutives || 3);
+    res.json(result);
+  } catch (error: any) {
+    console.error(`[API/Hunt] Hunt failed for ${domain}:`, error.message);
+    res.status(500).json({
+      error: "Strategic entity discovery failed",
+      message: error.message,
+      domain,
+    });
+  }
 });
 
 // --- Email Templates API ---
@@ -4993,34 +5043,46 @@ app.post("/api/signals/:id/dismiss", (req, res) => {
 setInterval(async () => {
   console.log('[SignalsMonitor] Running scheduled intent signals scan...');
   try {
-    // Get all non-CLOSED leads that have a company and belong to a user
+    const TARGET_NICHES = ['Oil & Gas', 'Real Estate & Property Development', 'Fintech & Banking', 'Fashion & Retail'];
+
     const leads = db.prepare(
-      "SELECT lead_id, company, user_id FROM leads WHERE status != 'CLOSED' AND company IS NOT NULL AND company != ''"
-    ).all() as { lead_id: string; company: string; user_id: number }[];
+      "SELECT lead_id, company, industry, user_id FROM leads WHERE status != 'CLOSED' AND company IS NOT NULL AND company != ''"
+    ).all() as { lead_id: string; company: string; industry: string; user_id: number }[];
 
     if (leads.length === 0) return;
 
-    // Batch by unique companies to avoid redundant API calls
-    const companyMap = new Map<string, { lead_id: string; user_id: number }[]>();
+    const companyMap = new Map<string, { lead_id: string; user_id: number; industry: string }[]>();
     for (const lead of leads) {
       const key = lead.company.toLowerCase();
       if (!companyMap.has(key)) companyMap.set(key, []);
-      companyMap.get(key)!.push({ lead_id: lead.lead_id, user_id: lead.user_id });
+      companyMap.get(key)!.push({ lead_id: lead.lead_id, user_id: lead.user_id, industry: lead.industry });
     }
 
-    const companies = [...companyMap.keys()];
-    console.log(`[SignalsMonitor] Scanning ${companies.length} unique companies...`);
+    // Sort: target niche companies first, then others
+    const companies = [...companyMap.keys()].sort((a, b) => {
+      const aIsTarget = companyMap.get(a)!.some(e => TARGET_NICHES.some(n => (e.industry || '').includes(n.split(' ')[0])));
+      const bIsTarget = companyMap.get(b)!.some(e => TARGET_NICHES.some(n => (e.industry || '').includes(n.split(' ')[0])));
+      return (bIsTarget ? 1 : 0) - (aIsTarget ? 1 : 0);
+    });
+
+    console.log(`[SignalsMonitor] Scanning ${Math.min(companies.length, 60)} unique companies (target niches first)...`);
 
     const CONCURRENCY = 3;
-    for (let i = 0; i < companies.length && i < 50; i += CONCURRENCY) {
+    for (let i = 0; i < companies.length && i < 60; i += CONCURRENCY) {
       const batch = companies.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async (companyKey) => {
         const entries = companyMap.get(companyKey)!;
         const companyName = leads.find(l => l.company.toLowerCase() === companyKey)?.company || companyKey;
+        const isTargetNiche = entries.some(e => TARGET_NICHES.some(n => (e.industry || '').includes(n.split(' ')[0])));
         try {
-          const signals = await intentSignalService.detectSignals(companyName);
+          // Target niche companies get KSA-specific signal detection PLUS general
+          const [generalSignals, ksaSignals] = await Promise.all([
+            intentSignalService.detectSignals(companyName),
+            isTargetNiche ? intentSignalService.detectKSASignals(companyName) : Promise.resolve([]),
+          ]);
+          const allSignals = [...generalSignals, ...ksaSignals];
           for (const entry of entries) {
-            insertSignals(signals, entry.lead_id, entry.user_id);
+            insertSignals(allSignals, entry.lead_id, entry.user_id);
           }
         } catch (e: any) {
           console.warn(`[SignalsMonitor] Error for "${companyName}":`, e.message);
@@ -5028,7 +5090,6 @@ setInterval(async () => {
       }));
     }
 
-    // Prune expired cache entries
     intentSignalService.pruneCache();
     console.log('[SignalsMonitor] Scan complete.');
   } catch (e: any) {
@@ -5741,15 +5802,17 @@ async function startServer() {
         });
       }, 10000);
 
-      // ── DAILY VERIFICATION CRON — Triple-verify all leads at 4 AM Riyadh ──
+      // ── JIN AI EMPLOYEE INITIALIZATION ──
+      console.log('[Jin] AI Employee initialized and ready');
+      
+      // ── CONTINUOUS VERIFICATION — runs every 3 minutes alongside crawl ──
       const scheduleVerification = () => {
-        const intervalMs = 6 * 60 * 60 * 1000; // Every 6 hours
-        console.log(`[Verify] Next verification in ${(intervalMs / 1000 / 60 / 60).toFixed(1)} hours`);
+        const intervalMs = 3 * 60 * 1000; // Every 3 minutes
 
         setTimeout(async () => {
           try {
             console.log('[Verify] === VERIFICATION CYCLE STARTED ===');
-            await runDailyVerification(db, 1000);
+            await runDailyVerification(db, 50); // 50 per cycle keeps it fast
             console.log('[Verify] === VERIFICATION CYCLE COMPLETE ===');
           } catch (err: any) {
             console.error('[Verify] Verification failed:', err.message);
@@ -5758,7 +5821,17 @@ async function startServer() {
         }, intervalMs);
       };
 
-      scheduleVerification();
+      // Run first verification immediately (15s after crawl starts)
+      setTimeout(async () => {
+        try {
+          console.log('[Verify] === INITIAL VERIFICATION STARTED ===');
+          await runDailyVerification(db, 50);
+          console.log('[Verify] === INITIAL VERIFICATION COMPLETE ===');
+        } catch (err: any) {
+          console.error('[Verify] Initial verification failed:', err.message);
+        }
+        scheduleVerification();
+      }, 15000);
     } else {
       console.log('[PreCrawler] Skipped — no GEMINI_API_KEY');
     }
