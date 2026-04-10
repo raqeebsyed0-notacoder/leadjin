@@ -35,7 +35,12 @@ import {
   setIntelligenceDatabase,
   updateLeadIntelligence,
   getLeadPipeline,
+  getPipelineView,
   getLeadScore,
+  getNextAction,
+  trackRelationship,
+  getRelationshipHistory,
+  calculateEngagementMetrics,
   processHuntResult,
   processOutreachSent,
   processReplyReceived,
@@ -5291,6 +5296,216 @@ app.get("/api/intelligence/metrics", (req, res) => {
   } catch (error: any) {
     console.error('[IntelligenceHub] Metrics error:', error.message);
     res.status(500).json({ error: "Failed to fetch metrics", message: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Module 5: Intelligence Hub - CRM Routes
+// ---------------------------------------------------------------------------
+
+// POST /api/lead-score/:id — Get AI-enhanced lead score
+app.post("/api/lead-score/:id", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  const { id } = req.params;
+  
+  // Verify lead belongs to user
+  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+  
+  try {
+    // Get API key (user-specific or system)
+    const apiKeyRow = db.prepare("SELECT gemini_api_key FROM user_settings WHERE user_id = ?").get(user.id) as any;
+    const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
+    
+    // Get base score and engagement metrics
+    const score = getLeadScore(id);
+    const engagement = calculateEngagementMetrics(id);
+    const history = getRelationshipHistory(id);
+    
+    // If API key available, get AI-enhanced insights
+    let aiInsights = null;
+    if (apiKey) {
+      try {
+        const ai = new (await import('@google/genai')).GoogleGenAI({ apiKey });
+        const prompt = `Analyze this lead for CRM intelligence:
+
+Lead: ${id}
+Score: ${score.overall}/100
+Engagement: ${engagement.engagement_score}/100
+Response Rate: ${engagement.response_rate}%
+Interactions: ${history.interaction_count}
+
+Provide brief analysis in JSON: { "hotLead": boolean, "keyInsight": string, "priority": "high|medium|low" }`;
+
+        const aiResponse = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: prompt,
+          config: { responseMimeType: 'application/json' }
+        });
+        
+        const text = aiResponse.text || '';
+        const cleaned = text.replace(/\`\`\`json\n?|\n?\`\`\`/g, '').trim();
+        aiInsights = JSON.parse(cleaned);
+      } catch (aiError: any) {
+        console.log('[LeadScore] AI enhancement skipped:', aiError.message);
+      }
+    }
+    
+    res.json({ 
+      lead_id: id, 
+      score, 
+      engagement,
+      history: {
+        interaction_count: history.interaction_count,
+        last_interaction_at: history.last_interaction_at,
+      },
+      ai_insights: aiInsights,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Lead score error:', error.message);
+    res.status(500).json({ error: "Failed to calculate lead score", message: error.message });
+  }
+});
+
+// POST /api/pipeline-view — Get pipeline view with relationship tracking
+app.post("/api/pipeline-view", (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  try {
+    const pipeline = getPipelineView(user.id);
+    const metrics = getPipelineMetrics(user.id);
+    
+    // Enhance pipeline with relationship data
+    const enhancedPipeline = pipeline.map(group => ({
+      ...group,
+      leads: group.leads.map(lead => {
+        const engagement = calculateEngagementMetrics(lead.lead_id);
+        const history = getRelationshipHistory(lead.lead_id);
+        return {
+          ...lead,
+          engagement,
+          recent_interactions: history.events.slice(0, 5),
+        };
+      }),
+    }));
+    
+    res.json({ 
+      pipeline: enhancedPipeline, 
+      metrics,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Pipeline view error:', error.message);
+    res.status(500).json({ error: "Failed to fetch pipeline view", message: error.message });
+  }
+});
+
+// POST /api/next-action/:id — Get AI-powered next best action recommendation
+app.post("/api/next-action/:id", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  const { id } = req.params;
+  
+  // Verify lead belongs to user
+  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+  
+  try {
+    // Get API key (user-specific or system)
+    const apiKeyRow = db.prepare("SELECT gemini_api_key FROM user_settings WHERE user_id = ?").get(user.id) as any;
+    const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
+    
+    // Get next action recommendation
+    const recommendation = await getNextAction(id, apiKey);
+    
+    // Get supporting data
+    const score = getLeadScore(id);
+    const engagement = calculateEngagementMetrics(id);
+    const history = getRelationshipHistory(id);
+    
+    res.json({ 
+      lead_id: id,
+      recommendation,
+      context: {
+        score: score.overall,
+        engagement: engagement.engagement_score,
+        status: (db.prepare("SELECT outreach_status FROM leads WHERE lead_id = ?").get(id) as any)?.outreach_status,
+        recent_interactions: history.events.slice(0, 3),
+      },
+      generated_at: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Next action error:', error.message);
+    res.status(500).json({ error: "Failed to generate recommendation", message: error.message });
+  }
+});
+
+// POST /api/relationship/:id/track — Track relationship events
+app.post("/api/relationship/:id/track", (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  const { id } = req.params;
+  const { events } = req.body;
+  
+  if (!Array.isArray(events)) {
+    return res.status(400).json({ error: "events array is required" });
+  }
+  
+  // Verify lead belongs to user
+  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+  
+  try {
+    const history = trackRelationship(id, events);
+    res.json({ 
+      status: "ok", 
+      history,
+      tracked_at: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Track relationship error:', error.message);
+    res.status(500).json({ error: "Failed to track relationship", message: error.message });
+  }
+});
+
+// GET /api/relationship/:id/history — Get relationship history
+app.get("/api/relationship/:id/history", (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  const { id } = req.params;
+  
+  // Verify lead belongs to user
+  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+  
+  try {
+    const history = getRelationshipHistory(id);
+    const engagement = calculateEngagementMetrics(id);
+    
+    res.json({ 
+      lead_id: id,
+      history,
+      engagement,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Get relationship history error:', error.message);
+    res.status(500).json({ error: "Failed to fetch relationship history", message: error.message });
   }
 });
 

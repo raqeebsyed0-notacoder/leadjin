@@ -1,13 +1,15 @@
 /**
- * Module 5: Intelligence Hub (CRM Schema Upgrade)
+ * Module 5: Intelligence Hub (CRM Intelligence Hub - Final Artisan Module)
  *
  * Central intelligence coordinator that wires all modules together:
  * - Hunter (Module 1) → Verifier (Module 2) → Writer (Module 3) → Reply Manager (Module 4) → CRM
  *
- * Provides unified lead scoring, pipeline management, and intelligence tracking.
+ * Provides unified lead scoring, pipeline management, relationship tracking,
+ * and AI-powered next best action recommendations using Gemini 2.5 Flash.
  */
 
 import type { Database } from 'better-sqlite3';
+import { GoogleGenAI } from '@google/genai';
 import type { HuntResult, ExecutiveProfile } from './linkedinHunter.js';
 import type { SovereignVerificationResult, LeadIdentity } from './sovereignVerifier.js';
 import type { CraftedOutreach, LeadProfile, OutreachContext } from './visionStrategist.js';
@@ -97,12 +99,47 @@ export interface CompositeScore {
   verification: number;
   intent: number;
   visionAlignment: number;
+  engagement: number;
   breakdown: {
     confidence: { raw: number; weighted: number; weight: number };
     verification: { raw: number; weighted: number; weight: number };
     intent: { raw: number; weighted: number; weight: number };
     vision: { raw: number; weighted: number; weight: number };
+    engagement: { raw: number; weighted: number; weight: number };
   };
+}
+
+export interface InteractionEvent {
+  type: 'email_sent' | 'email_reply' | 'email_open' | 'email_click' | 'meeting' | 'call' | 'note' | 'status_change';
+  timestamp: string;
+  details?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface RelationshipHistory {
+  lead_id: string;
+  events: InteractionEvent[];
+  last_interaction_at?: string;
+  interaction_count: number;
+}
+
+export interface NextActionRecommendation {
+  action: string;
+  priority: 'high' | 'medium' | 'low';
+  reasoning: string;
+  suggested_timing?: string;
+  expected_outcome?: string;
+  confidence: number;
+}
+
+export interface EngagementMetrics {
+  emails_sent: number;
+  emails_replied: number;
+  emails_opened: number;
+  emails_clicked: number;
+  meetings_booked: number;
+  response_rate: number;
+  engagement_score: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +339,191 @@ function safeJsonParse<T>(json: string | null | undefined, defaultValue: T): T {
 }
 
 // ---------------------------------------------------------------------------
+// Relationship Tracking (Module 5 Core Feature)
+// ---------------------------------------------------------------------------
+
+/**
+ * Track relationship history for a lead
+ * Maintains interaction history from all touchpoints
+ */
+export function trackRelationship(
+  leadId: string,
+  events: InteractionEvent[]
+): RelationshipHistory {
+  const db = getDb();
+  
+  // Get existing interaction history
+  const existing = db.prepare(
+    'SELECT interaction_history FROM leads WHERE lead_id = ?'
+  ).get(leadId) as any;
+  
+  let history: InteractionEvent[] = [];
+  if (existing?.interaction_history) {
+    history = safeJsonParse(existing.interaction_history, []);
+  }
+  
+  // Add new events with timestamps
+  const newEvents = events.map(e => ({
+    ...e,
+    timestamp: e.timestamp || new Date().toISOString(),
+  }));
+  
+  history = [...history, ...newEvents];
+  
+  // Update lead record
+  db.prepare(
+    'UPDATE leads SET interaction_history = ?, last_interaction_at = ? WHERE lead_id = ?'
+  ).run(
+    JSON.stringify(history),
+    newEvents[newEvents.length - 1]?.timestamp || new Date().toISOString(),
+    leadId
+  );
+  
+  // Log events to activity_log for auditing
+  for (const event of newEvents) {
+    db.prepare(
+      'INSERT INTO activity_log (lead_id, type, description, created_at) VALUES (?, ?, ?, ?)'
+    ).run(
+      leadId,
+      event.type.toUpperCase(),
+      event.details || `${event.type} event`,
+      event.timestamp
+    );
+  }
+  
+  return {
+    lead_id: leadId,
+    events: history,
+    last_interaction_at: history[history.length - 1]?.timestamp,
+    interaction_count: history.length,
+  };
+}
+
+/**
+ * Get relationship history for a lead
+ */
+export function getRelationshipHistory(leadId: string): RelationshipHistory {
+  const db = getDb();
+  
+  // Get from leads table
+  const lead = db.prepare(
+    'SELECT interaction_history, last_interaction_at FROM leads WHERE lead_id = ?'
+  ).get(leadId) as any;
+  
+  let events: InteractionEvent[] = [];
+  if (lead?.interaction_history) {
+    events = safeJsonParse(lead.interaction_history, []);
+  }
+  
+  // Also fetch from activity_log for complete history
+  const activityEvents = db.prepare(
+    `SELECT type, description as details, created_at as timestamp 
+     FROM activity_log 
+     WHERE lead_id = ? 
+     ORDER BY created_at DESC`
+  ).all(leadId) as any[];
+  
+  // Merge and deduplicate
+  const allEvents = [...events];
+  for (const activity of activityEvents) {
+    const eventType = mapActivityTypeToInteraction(activity.type);
+    if (!events.some(e => e.timestamp === activity.timestamp && e.type === eventType)) {
+      allEvents.push({
+        type: eventType,
+        timestamp: activity.timestamp,
+        details: activity.details,
+      });
+    }
+  }
+  
+  allEvents.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  
+  return {
+    lead_id: leadId,
+    events: allEvents,
+    last_interaction_at: lead?.last_interaction_at || allEvents[0]?.timestamp,
+    interaction_count: allEvents.length,
+  };
+}
+
+function mapActivityTypeToInteraction(type: string): InteractionEvent['type'] {
+  const mapping: Record<string, InteractionEvent['type']> = {
+    'EMAIL_SENT': 'email_sent',
+    'EMAIL_REPLY': 'email_reply',
+    'STATUS_CHANGE': 'status_change',
+    'NOTE': 'note',
+    'MEETING': 'meeting',
+    'CALL': 'call',
+    'SEQUENCE_EMAIL_QUEUED': 'email_sent',
+    'SEQUENCE_PAUSED': 'status_change',
+  };
+  return mapping[type] || 'note';
+}
+
+/**
+ * Calculate engagement metrics for a lead
+ */
+export function calculateEngagementMetrics(leadId: string): EngagementMetrics {
+  const db = getDb();
+  
+  // Count emails sent
+  const emailsSent = db.prepare(
+    'SELECT COUNT(*) as count FROM email_queue WHERE lead_id = ? AND status = ?'
+  ).get(leadId, 'SENT') as { count: number };
+  
+  // Count replies (via activity_log)
+  const replies = db.prepare(
+    'SELECT COUNT(*) as count FROM activity_log WHERE lead_id = ? AND type = ?'
+  ).get(leadId, 'EMAIL_REPLY') as { count: number };
+  
+  // Count email opens and clicks
+  const opens = db.prepare(
+    `SELECT COUNT(*) as count FROM email_events ee
+     JOIN email_queue eq ON eq.id = ee.email_queue_id
+     WHERE eq.lead_id = ? AND ee.event_type = 'open'`
+  ).get(leadId) as { count: number };
+  
+  const clicks = db.prepare(
+    `SELECT COUNT(*) as count FROM email_events ee
+     JOIN email_queue eq ON eq.id = ee.email_queue_id
+     WHERE eq.lead_id = ? AND ee.event_type = 'click'`
+  ).get(leadId) as { count: number };
+  
+  // Count meetings from bookings table
+  const meetings = db.prepare(
+    'SELECT COUNT(*) as count FROM bookings WHERE lead_id = ?'
+  ).get(leadId) as { count: number };
+  
+  const sentCount = emailsSent?.count || 0;
+  const replyCount = replies?.count || 0;
+  const openCount = opens?.count || 0;
+  const clickCount = clicks?.count || 0;
+  const meetingCount = meetings?.count || 0;
+  
+  // Calculate rates
+  const responseRate = sentCount > 0 ? (replyCount / sentCount) * 100 : 0;
+  
+  // Calculate engagement score (0-100)
+  // Weighted: replies (40%), opens (25%), clicks (25%), meetings (10%)
+  const engagementScore = Math.min(100, Math.round(
+    (responseRate * 0.4) + 
+    (Math.min(100, (openCount / Math.max(1, sentCount)) * 100) * 0.25) +
+    (Math.min(100, (clickCount / Math.max(1, sentCount)) * 100) * 0.25) +
+    (Math.min(100, meetingCount * 20) * 0.1)
+  ));
+  
+  return {
+    emails_sent: sentCount,
+    emails_replied: replyCount,
+    emails_opened: openCount,
+    emails_clicked: clickCount,
+    meetings_booked: meetingCount,
+    response_rate: Math.round(responseRate * 10) / 10,
+    engagement_score: engagementScore,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Pipeline Management
 // ---------------------------------------------------------------------------
 
@@ -341,6 +563,13 @@ export function getLeadPipeline(userId?: number): PipelineGroup[] {
   }
 
   return pipeline;
+}
+
+/**
+ * Get pipeline view - alias for getLeadPipeline for API consistency
+ */
+export function getPipelineView(userId?: number): PipelineGroup[] {
+  return getLeadPipeline(userId);
 }
 
 /**
@@ -402,12 +631,12 @@ export function advanceLeadStage(leadId: string, newStatus: OutreachStatus): boo
 }
 
 // ---------------------------------------------------------------------------
-// Lead Scoring
+// Lead Scoring (Enhanced with Engagement Metrics)
 // ---------------------------------------------------------------------------
 
 /**
  * Calculate composite score for a lead
- * Combines: confidence + verification + intent + vision alignment
+ * Combines: confidence + verification + intent + vision alignment + engagement
  */
 export function getLeadScore(leadId: string): CompositeScore {
   const db = getDb();
@@ -420,21 +649,24 @@ export function getLeadScore(leadId: string): CompositeScore {
       verification: 0,
       intent: 0,
       visionAlignment: 0,
+      engagement: 0,
       breakdown: {
-        confidence: { raw: 0, weighted: 0, weight: 0.25 },
+        confidence: { raw: 0, weighted: 0, weight: 0.20 },
         verification: { raw: 0, weighted: 0, weight: 0.25 },
-        intent: { raw: 0, weighted: 0, weight: 0.25 },
-        vision: { raw: 0, weighted: 0, weight: 0.25 },
+        intent: { raw: 0, weighted: 0, weight: 0.15 },
+        vision: { raw: 0, weighted: 0, weight: 0.20 },
+        engagement: { raw: 0, weighted: 0, weight: 0.20 },
       },
     };
   }
 
-  // Weights for composite score
+  // Weights for composite score (updated to include engagement)
   const WEIGHTS = {
-    confidence: 0.25,
-    verification: 0.30,
-    intent: 0.20,
-    vision: 0.25,
+    confidence: 0.20,
+    verification: 0.25,
+    intent: 0.15,
+    vision: 0.20,
+    engagement: 0.20,
   };
 
   // Confidence score (0-100)
@@ -461,14 +693,19 @@ export function getLeadScore(leadId: string): CompositeScore {
 
   // Vision alignment score (0-100)
   const visionScore = lead.vision_alignment_score || 0;
+  
+  // Engagement score (0-100) - calculated from interaction history
+  const engagementMetrics = calculateEngagementMetrics(leadId);
+  const engagementScore = engagementMetrics.engagement_score;
 
   // Calculate weighted overall score
   const weightedConfidence = confidenceScore * WEIGHTS.confidence;
   const weightedVerification = verificationScore * WEIGHTS.verification;
   const weightedIntent = intentScore * WEIGHTS.intent;
   const weightedVision = visionScore * WEIGHTS.vision;
+  const weightedEngagement = engagementScore * WEIGHTS.engagement;
 
-  const overall = Math.round(weightedConfidence + weightedVerification + weightedIntent + weightedVision);
+  const overall = Math.round(weightedConfidence + weightedVerification + weightedIntent + weightedVision + weightedEngagement);
 
   return {
     overall,
@@ -476,13 +713,115 @@ export function getLeadScore(leadId: string): CompositeScore {
     verification: verificationScore,
     intent: intentScore,
     visionAlignment: visionScore,
+    engagement: engagementScore,
     breakdown: {
       confidence: { raw: confidenceScore, weighted: Math.round(weightedConfidence), weight: WEIGHTS.confidence },
       verification: { raw: verificationScore, weighted: Math.round(weightedVerification), weight: WEIGHTS.verification },
       intent: { raw: intentScore, weighted: Math.round(weightedIntent), weight: WEIGHTS.intent },
       vision: { raw: visionScore, weighted: Math.round(weightedVision), weight: WEIGHTS.vision },
+      engagement: { raw: engagementScore, weighted: Math.round(weightedEngagement), weight: WEIGHTS.engagement },
     },
   };
+}
+
+/**
+ * Get AI-enhanced lead score using Gemini 2.5 Flash
+ * Provides intelligent scoring with reasoning
+ */
+export async function getLeadScoreAI(
+  leadId: string,
+  apiKey?: string
+): Promise<CompositeScore & { aiReasoning: string; recommendations: string[] }> {
+  const db = getDb();
+  const baseScore = getLeadScore(leadId);
+  
+  const lead = db.prepare('SELECT * FROM leads WHERE lead_id = ?').get(leadId) as any;
+  if (!lead || !apiKey) {
+    return {
+      ...baseScore,
+      aiReasoning: 'AI scoring unavailable - using algorithmic score',
+      recommendations: ['Add Gemini API key for AI-enhanced scoring'],
+    };
+  }
+  
+  const engagement = calculateEngagementMetrics(leadId);
+  const history = getRelationshipHistory(leadId);
+  
+  const ai = new GoogleGenAI({ apiKey });
+  
+  const prompt = `You are a CRM intelligence expert. Analyze this lead and provide an AI-enhanced scoring assessment.
+
+LEAD PROFILE:
+- Name: ${lead.name}
+- Title: ${lead.title || 'Unknown'}
+- Company: ${lead.company || 'Unknown'}
+- Industry: ${lead.industry || 'Unknown'}
+- Email Verified: ${lead.email_verified ? 'Yes' : 'No'}
+- Outreach Status: ${lead.outreach_status || 'new'}
+- Reply Category: ${lead.reply_category || 'None'}
+
+ENGAGEMENT METRICS:
+- Emails Sent: ${engagement.emails_sent}
+- Emails Replied: ${engagement.emails_replied}
+- Emails Opened: ${engagement.emails_opened}
+- Emails Clicked: ${engagement.emails_clicked}
+- Response Rate: ${engagement.response_rate}%
+- Meetings Booked: ${engagement.meetings_booked}
+
+BASE SCORES:
+- Confidence: ${baseScore.confidence}/100
+- Verification: ${baseScore.verification}/100
+- Intent: ${baseScore.intent}/100
+- Vision Alignment: ${baseScore.visionAlignment}/100
+- Engagement: ${baseScore.engagement}/100
+- Overall: ${baseScore.overall}/100
+
+INTERACTION HISTORY (${history.interaction_count} events):
+${history.events.slice(0, 10).map(e => `- ${e.type} at ${e.timestamp}: ${e.details || ''}`).join('\n')}
+
+TASK:
+Analyze this lead's potential value and provide:
+1. AI reasoning for the score (why this lead is hot/cold)
+2. Three specific recommendations to improve engagement
+3. A confidence adjustment (0-100) representing your AI assessment
+
+Respond with JSON:
+{
+  "aiReasoning": "Detailed explanation of lead quality assessment",
+  "recommendations": ["Action 1", "Action 2", "Action 3"],
+  "aiConfidence": 85,
+  "hotLead": true/false
+}`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: { responseMimeType: 'application/json' }
+    });
+    
+    const text = response.text || '';
+    const cleaned = text.replace(/\`\`\`json\n?|\n?\`\`\`/g, '').trim();
+    const result = JSON.parse(cleaned);
+    
+    // Blend AI confidence with base score (70% base, 30% AI)
+    const aiConfidence = result.aiConfidence || baseScore.overall;
+    const blendedOverall = Math.round((baseScore.overall * 0.7) + (aiConfidence * 0.3));
+    
+    return {
+      ...baseScore,
+      overall: blendedOverall,
+      aiReasoning: result.aiReasoning || 'AI analysis completed',
+      recommendations: result.recommendations || [],
+    };
+  } catch (error: any) {
+    console.error('[IntelligenceHub] AI scoring failed:', error.message);
+    return {
+      ...baseScore,
+      aiReasoning: 'AI scoring failed - using algorithmic score',
+      recommendations: ['Retry AI scoring later'],
+    };
+  }
 }
 
 /**
@@ -509,6 +848,241 @@ export function getTopScoredLeads(userId?: number, limit: number = 20): Array<Le
     const score = getLeadScore(lead.lead_id);
     return { ...lead, compositeScore: score.overall };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Next Best Action (Module 5 AI Feature)
+// ---------------------------------------------------------------------------
+
+/**
+ * Get next best action recommendation using Gemini 2.5 Flash
+ * Analyzes lead state, history, and engagement to suggest optimal next step
+ */
+export async function getNextAction(
+  leadId: string,
+  apiKey?: string
+): Promise<NextActionRecommendation> {
+  const db = getDb();
+  
+  const lead = db.prepare('SELECT * FROM leads WHERE lead_id = ?').get(leadId) as any;
+  if (!lead) {
+    return {
+      action: 'Lead not found',
+      priority: 'low',
+      reasoning: 'The specified lead ID does not exist in the database',
+      confidence: 0,
+    };
+  }
+  
+  // Gather context for AI decision
+  const score = getLeadScore(leadId);
+  const engagement = calculateEngagementMetrics(leadId);
+  const history = getRelationshipHistory(leadId);
+  
+  // If no API key, return rule-based recommendation
+  if (!apiKey) {
+    return generateRuleBasedRecommendation(lead, score, engagement, history);
+  }
+  
+  // Use Gemini for intelligent recommendation
+  const ai = new GoogleGenAI({ apiKey });
+  
+  const prompt = `You are a CRM intelligence expert. Analyze this lead and recommend the next best action.
+
+LEAD PROFILE:
+- Name: ${lead.name}
+- Title: ${lead.title || 'Unknown'}
+- Company: ${lead.company || 'Unknown'}
+- Industry: ${lead.industry || 'Unknown'}
+- Email: ${lead.email || 'Not available'}
+- LinkedIn: ${lead.linkedin || 'Not available'}
+- Outreach Status: ${lead.outreach_status || 'new'}
+- Reply Category: ${lead.reply_category || 'None'}
+
+COMPOSITE SCORE: ${score.overall}/100
+- Confidence: ${score.confidence}/100
+- Verification: ${score.verification}/100
+- Intent: ${score.intent}/100
+- Vision Alignment: ${score.visionAlignment}/100
+- Engagement: ${score.engagement}/100
+
+ENGAGEMENT METRICS:
+- Emails Sent: ${engagement.emails_sent}
+- Response Rate: ${engagement.response_rate}%
+- Meetings Booked: ${engagement.meetings_booked}
+
+RECENT INTERACTIONS (last 5):
+${history.events.slice(0, 5).map(e => `- ${e.type} at ${new Date(e.timestamp).toLocaleDateString()}: ${e.details || ''}`).join('\n') || 'No interactions recorded'}
+
+AVAILABLE ACTIONS:
+1. send_email - Send personalized outreach email
+2. send_followup - Send follow-up to previous email
+3. schedule_meeting - Propose a meeting/call
+4. connect_linkedin - Connect via LinkedIn
+5. make_call - Make a phone call
+6. send_proposal - Send a proposal/quotation
+7. wait - Wait for lead to respond
+8. disqualify - Mark as not interested/closed
+9. escalate - Escalate to senior team member
+
+TASK:
+Based on the lead's status, score, and interaction history, recommend the single best next action.
+Consider:
+- Don't spam leads who haven't responded to multiple emails
+- High-scoring leads deserve more aggressive follow-up
+- Leads that replied with questions need answers before selling
+- Meeting-booked leads need nurturing
+
+Respond with JSON:
+{
+  "action": "One of the available actions above",
+  "priority": "high|medium|low",
+  "reasoning": "Brief explanation of why this action is recommended",
+  "suggested_timing": "When to take this action (e.g., 'Immediately', 'Wait 2 days', 'Thursday morning')",
+  "expected_outcome": "What we expect to happen from this action",
+  "confidence": 85
+}`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: { responseMimeType: 'application/json' }
+    });
+    
+    const text = response.text || '';
+    const cleaned = text.replace(/\`\`\`json\n?|\n?\`\`\`/g, '').trim();
+    const result = JSON.parse(cleaned);
+    
+    return {
+      action: result.action || 'send_email',
+      priority: result.priority || 'medium',
+      reasoning: result.reasoning || 'AI recommendation',
+      suggested_timing: result.suggested_timing,
+      expected_outcome: result.expected_outcome,
+      confidence: result.confidence || 70,
+    };
+  } catch (error: any) {
+    console.error('[IntelligenceHub] AI next action failed:', error.message);
+    return generateRuleBasedRecommendation(lead, score, engagement, history);
+  }
+}
+
+/**
+ * Generate rule-based recommendation as fallback
+ */
+function generateRuleBasedRecommendation(
+  lead: any,
+  score: CompositeScore,
+  engagement: EngagementMetrics,
+  history: RelationshipHistory
+): NextActionRecommendation {
+  const status = lead.outreach_status as OutreachStatus;
+  const replyCategory = lead.reply_category;
+  
+  // Rule-based logic for fallback
+  if (status === 'new') {
+    return {
+      action: 'send_email',
+      priority: score.overall > 70 ? 'high' : 'medium',
+      reasoning: 'New lead with no outreach yet. Initial contact recommended.',
+      suggested_timing: 'Within 24 hours',
+      expected_outcome: 'Lead becomes aware of our services',
+      confidence: 80,
+    };
+  }
+  
+  if (status === 'contacted') {
+    if (engagement.emails_sent >= 3 && engagement.emails_replied === 0) {
+      return {
+        action: 'connect_linkedin',
+        priority: 'medium',
+        reasoning: 'Multiple emails sent with no response. Try alternative channel.',
+        suggested_timing: 'After 1 week from last email',
+        expected_outcome: 'Connection established on LinkedIn',
+        confidence: 60,
+      };
+    }
+    return {
+      action: 'send_followup',
+      priority: 'medium',
+      reasoning: 'Previous email sent but no reply yet. Gentle follow-up recommended.',
+      suggested_timing: '3-4 days after initial email',
+      expected_outcome: 'Lead responds to follow-up',
+      confidence: 65,
+    };
+  }
+  
+  if (status === 'replied') {
+    if (replyCategory === 'QUESTION') {
+      return {
+        action: 'send_email',
+        priority: 'high',
+        reasoning: 'Lead asked questions and is waiting for answers.',
+        suggested_timing: 'Within 4 hours',
+        expected_outcome: 'Questions answered, relationship built',
+        confidence: 85,
+      };
+    }
+    if (replyCategory === 'INTERESTED') {
+      return {
+        action: 'schedule_meeting',
+        priority: 'high',
+        reasoning: 'Lead expressed interest. Time to propose a meeting.',
+        suggested_timing: 'Within 24 hours',
+        expected_outcome: 'Meeting scheduled',
+        confidence: 90,
+      };
+    }
+    return {
+      action: 'send_email',
+      priority: 'high',
+      reasoning: 'Lead replied and needs a response.',
+      suggested_timing: 'Within 24 hours',
+      expected_outcome: 'Conversation continues',
+      confidence: 80,
+    };
+  }
+  
+  if (status === 'interested') {
+    return {
+      action: 'send_proposal',
+      priority: 'high',
+      reasoning: 'Lead is interested. Time to send a formal proposal.',
+      suggested_timing: 'Within 48 hours',
+      expected_outcome: 'Proposal sent and under consideration',
+      confidence: 85,
+    };
+  }
+  
+  if (status === 'meeting_booked') {
+    return {
+      action: 'send_email',
+      priority: 'medium',
+      reasoning: 'Meeting already booked. Send agenda/preparation materials.',
+      suggested_timing: '1 day before meeting',
+      expected_outcome: 'Lead is prepared for the meeting',
+      confidence: 75,
+    };
+  }
+  
+  if (status === 'closed') {
+    return {
+      action: 'wait',
+      priority: 'low',
+      reasoning: 'Lead is closed. No further action needed unless they re-engage.',
+      suggested_timing: 'Revisit in 3 months',
+      expected_outcome: 'Lead may re-engage in future',
+      confidence: 50,
+    };
+  }
+  
+  return {
+    action: 'send_email',
+    priority: 'medium',
+    reasoning: 'Default action based on current state.',
+    confidence: 60,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -564,6 +1138,14 @@ export async function processOutreachSent(
       senderUserId,
     },
   });
+  
+  // Track in relationship history
+  trackRelationship(leadId, [{
+    type: 'email_sent',
+    timestamp: new Date().toISOString(),
+    details: `Outreach sent: ${craftedOutreach.subject}`,
+    metadata: { personalizationScore: craftedOutreach.personalizationScore }
+  }]);
 }
 
 /**
@@ -582,6 +1164,14 @@ export async function processReplyReceived(
       receivedAt: new Date().toISOString(),
     },
   });
+
+  // Track in relationship history
+  trackRelationship(leadId, [{
+    type: 'email_reply',
+    timestamp: new Date().toISOString(),
+    details: `Reply received: ${classification.category}`,
+    metadata: { category: classification.category, confidence: classification.confidence }
+  }]);
 
   // Auto-advance stage based on classification
   if (classification.category === 'INTERESTED') {
@@ -697,10 +1287,16 @@ export default {
   setIntelligenceDatabase,
   updateLeadIntelligence,
   getLeadPipeline,
+  getPipelineView,
   getLeadsByStatus,
   advanceLeadStage,
   getLeadScore,
+  getLeadScoreAI,
   getTopScoredLeads,
+  trackRelationship,
+  getRelationshipHistory,
+  getNextAction,
+  calculateEngagementMetrics,
   processHuntResult,
   processOutreachSent,
   processReplyReceived,
