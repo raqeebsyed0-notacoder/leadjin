@@ -231,6 +231,88 @@ export function initPreCrawlTables(db: any): void {
 }
 
 // ---------------------------------------------------------------------------
+// KSA Niche-Specific Search Templates
+// ---------------------------------------------------------------------------
+
+const KSA_NICHE_PROMPTS: Record<string, string> = {
+  'Oil & Gas': `Search for real companies in Saudi Arabia's Oil & Gas sector in ${'city'}. Focus on:
+- Saudi Aramco suppliers and contractors (Tier 1 and Tier 2 vendors)
+- Oilfield services companies (drilling, well services, maintenance)
+- Engineering & EPC contractors licensed by Saudi Aramco or SABIC
+- Downstream petrochemicals and refining companies
+- Energy technology providers with KSA offices
+Search both English and Arabic: شركات النفط والغاز, موردي أرامكو, خدمات الحقول النفطية
+Find senior decision-makers: VP Procurement, Head of Contracts, Operations Director, Technical Director`,
+
+  'Real Estate & Property Development': `Search for real estate developers and property companies in ${'city'}, Saudi Arabia. Focus on:
+- Vision 2030 giga-project contractors (NEOM, Red Sea Project, Qiddiya, Diriyah Gate)
+- Licensed real estate developers (REGA-registered companies)
+- Luxury residential and commercial developers
+- PropTech companies operating in KSA
+- Real estate investment funds (REITs) and management companies
+Arabic: شركات التطوير العقاري, المطورون العقاريون, الاستثمار العقاري
+Find: CEO, Managing Director, Head of Development, Chief Investment Officer`,
+
+  'Fintech & Banking': `Search for fintech companies and financial services firms in ${'city'}, Saudi Arabia. Focus on:
+- SAMA-licensed fintechs (payment, lending, BNPL, WealthTech)
+- Digital banking and neobanks operating in KSA
+- Islamic finance technology companies
+- Fintech companies backed by Saudi Venture Capital or PIF
+- Payment gateway and POS solution providers
+Arabic: شركات التقنية المالية, الفنتك, الدفع الإلكتروني, التمويل الإسلامي
+Find: CEO, CTO, Head of Business Development, Chief Product Officer`,
+
+  'Fashion & Retail': `Search for fashion brands and luxury retail companies in ${'city'}, Saudi Arabia. Focus on:
+- Saudi-owned fashion and apparel brands
+- Luxury fashion retailers operating in KSA malls (not just franchises — find the local operators)
+- E-commerce fashion platforms targeting MENA
+- Modest fashion and abaya designers with commercial operations
+- Retail holding groups managing fashion brands in KSA
+Arabic: شركات الأزياء, العلامات التجارية للأزياء, الأزياء السعودية, تجزئة الفاشن
+Find: CEO, Brand Manager, Head of Retail Operations, Chief Commercial Officer`,
+};
+
+function buildCrawlPrompt(industry: string, city: string): string {
+  const nicheTemplate = KSA_NICHE_PROMPTS[industry];
+  const searchText = nicheTemplate
+    ? nicheTemplate.replace(/\$\{'city'\}/g, city)
+    : `Search Google for real companies in the ${industry} sector located in ${city}, Saudi Arabia. Search both English and Arabic. Find 10-15 verified companies.`;
+
+  return `${searchText}
+
+For each company found, provide:
+1. Company name (real, verified — no made-up names)
+2. Website domain (e.g. aramco.com)
+3. A senior decision-maker (CEO, CTO, VP, Director, Manager) — full name and title
+4. That person's work email (personal: firstname.lastname@domain, NOT info@ or contact@)
+5. That person's LinkedIn profile URL
+6. Company phone number (Saudi +966 format preferred)
+7. Company's X/Twitter handle
+8. Company's Snapchat handle (if any — very common in KSA B2B)
+9. Company's TikTok handle (if any)
+10. Company HQ area/district
+11. Company size (employee estimate)
+12. One-line description
+
+Only include REAL, ACTIVE companies verifiable via Google Search. Return ONLY valid JSON array (no markdown):
+[{
+  "company": "string",
+  "domain": "string",
+  "person_name": "string",
+  "person_title": "string",
+  "person_email": "personal email or null",
+  "person_linkedin": "URL or null",
+  "company_phone": "+966... or null",
+  "company_x": "@handle or null",
+  "company_snapchat": "@handle or null",
+  "company_tiktok": "@handle or null",
+  "headquarters": "area/district or null",
+  "company_size": "estimate or null",
+  "description": "one line or null"
+}]`;
+}
+
+// ---------------------------------------------------------------------------
 // Crawl a single city + industry combination
 // ---------------------------------------------------------------------------
 
@@ -249,41 +331,7 @@ export async function crawlCityIndustry(
   db.prepare(`INSERT OR REPLACE INTO crawl_jobs (city, industry, status, started_at) VALUES (?, ?, 'running', ?)`)
     .run(city, industry, new Date().toISOString());
 
-  const prompt = `Search Google for real companies in the ${industry} sector located in ${city}, Saudi Arabia.
-
-For each company, find:
-1. Company name (real, verified)
-2. Website domain (e.g. aramco.com)
-3. A senior person (CEO, CTO, VP, Director, Manager) — their full name and title
-4. That person's work email (personal email like firstname.lastname@domain, NOT info@ or contact@)
-5. That person's LinkedIn profile URL
-6. Company phone number (Saudi +966 format)
-7. Company's X/Twitter handle
-8. Company's Snapchat handle (if any)
-9. Company's TikTok handle (if any)
-10. Company HQ address/area
-11. Company size (employees estimate)
-12. One-line company description
-
-Find 10-15 companies. Only include REAL companies you can verify via Google Search.
-Search both English and Arabic company names.
-
-Return ONLY valid JSON array (no markdown, no backticks):
-[{
-  "company": "string",
-  "domain": "string",
-  "person_name": "string",
-  "person_title": "string",
-  "person_email": "personal email or null",
-  "person_linkedin": "URL or null",
-  "company_phone": "+966... or null",
-  "company_x": "@handle or null",
-  "company_snapchat": "@handle or null",
-  "company_tiktok": "@handle or null",
-  "headquarters": "area/district or null",
-  "company_size": "estimate or null",
-  "description": "one line or null"
-}]`;
+  const prompt = buildCrawlPrompt(industry, city);
 
   try {
     const response = await ai.models.generateContent({
@@ -596,8 +644,9 @@ export async function startPerpetualCrawl(
       console.log(`[PreCrawler] Phase: ${phase.name} (${phase.cities.length} cities)`);
 
       try {
+        const TARGET_INDUSTRIES = ['Oil & Gas', 'Real Estate & Property Development', 'Fintech & Banking', 'Fashion & Retail'];
         const result = await runPreCrawlBatch(
-          db, apiKey, phase.cities, INDUSTRIES, delayBetweenMs,
+          db, apiKey, phase.cities, TARGET_INDUSTRIES, delayBetweenMs,
           (done, total, current) => {
             if (done % 10 === 0) console.log(`[PreCrawler][${phase.name}] ${done}/${total} — ${current}`);
           },
@@ -730,9 +779,15 @@ export async function runDailyVerification(
 
   // Get all unverified or stale people (not verified in last 24 hours)
   const people = db.prepare(`
-    SELECT id, name, email, linkedin_url, phone FROM person_cache
+    SELECT id, name, email, linkedin_url, phone, industry FROM person_cache
     WHERE email IS NOT NULL
     AND (email_verified = 0 OR verified_at IS NULL OR verified_at < datetime('now', '-1 day'))
+    ORDER BY
+      CASE
+        WHEN industry IN ('Oil & Gas', 'Real Estate & Property Development', 'Fintech & Banking', 'Fashion & Retail') THEN 0
+        ELSE 1
+      END ASC,
+      crawled_at DESC
     LIMIT ?
   `).all(batchSize) as any[];
 
@@ -775,7 +830,7 @@ export async function runDailyVerification(
       if (result.status === 'rejected') continue;
       const { id, emailOk, waOk, liOk, catchAll, linkedin_url } = result.value;
 
-      // If catch-all domain, mark email as unverified (can't trust SMTP 250)
+      // Only truly verified = SMTP 250 on a non-catch-all domain
       const reallyVerified = emailOk && !catchAll;
 
       if (reallyVerified) emailValid++; else emailInvalid++;

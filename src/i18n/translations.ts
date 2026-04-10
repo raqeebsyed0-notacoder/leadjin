@@ -123,8 +123,6 @@ export const translations = {
     // New i18n keys
     dashboard: "Dashboard",
     harvestTitle: "Harvest High-Value Leads",
-    targetIndustry: "Target Industry",
-    geography: "Geography",
     enriching: "Enriching...",
     emailFound: "Email found",
     phoneFound: "Phone found",
@@ -154,7 +152,6 @@ export const translations = {
     cancel: "Cancel",
     delete: "Delete",
     edit: "Edit",
-    export: "Export",
     search: "Search",
     filter: "Filter",
     send: "Send",
@@ -322,8 +319,6 @@ export const translations = {
     // New i18n keys
     dashboard: "لوحة التحكم",
     harvestTitle: "اكتشف العملاء المحتملين",
-    targetIndustry: "القطاع المستهدف",
-    geography: "المنطقة الجغرافية",
     enriching: "جاري الإثراء...",
     emailFound: "تم العثور على البريد",
     phoneFound: "تم العثور على الهاتف",
@@ -353,7 +348,6 @@ export const translations = {
     cancel: "إلغاء",
     delete: "حذف",
     edit: "تعديل",
-    export: "تصدير",
     search: "بحث",
     filter: "تصفية",
     send: "إرسال",

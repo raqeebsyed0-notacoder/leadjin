@@ -112,7 +112,7 @@ Only include verified, recent signals. Return empty array if nothing found.`;
     try {
       const ai = this.getAI();
       const response = await ai.models.generateContent({
-        model: "gemini-flash-lite-latest",
+        model: "gemini-2.5-flash",
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
@@ -148,7 +148,7 @@ Only include verified signals with Saudi / GCC relevance. Return empty array if 
     try {
       const ai = this.getAI();
       const response = await ai.models.generateContent({
-        model: "gemini-flash-lite-latest",
+        model: "gemini-2.5-flash",
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
@@ -178,7 +178,7 @@ Only return confirmed job changes in the last 90 days. Return empty array if no 
     try {
       const ai = this.getAI();
       const response = await ai.models.generateContent({
-        model: "gemini-flash-lite-latest",
+        model: "gemini-2.5-flash",
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],

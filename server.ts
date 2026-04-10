@@ -28,6 +28,7 @@ import { intentSignalService } from './src/services/intentSignals.js';
 import { createCompleteJinRouter } from './src/services/jinCompleteRoutes.js';
 import { huntExecutives } from './src/services/linkedinHunter.js';
 import { tripleVerify } from './src/services/sovereignVerifier.js';
+import { craftOutreach, type LeadProfile, type OutreachContext } from './src/services/visionStrategist.js';
 dotenv.config();
 
 // --- FOUNDER MODE Configuration ---
@@ -3608,6 +3609,53 @@ app.post("/api/leads/status", (req, res) => {
     id, user.id, "STATUS_CHANGE", `Status updated to ${status}`
   );
   res.json({ status: "ok" });
+});
+
+// --- Vision Strategist: Craft personalized outreach ---
+app.post("/api/craft-outreach", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  // Check subscription/trial status
+  const outreachUser = db.prepare("SELECT email, subscription_plan, subscription_expires_at, trial_ends_at, is_founder FROM users WHERE id = ?").get(user.id) as any;
+  const outreachSubStatus = getSubscriptionStatus(outreachUser);
+  if (!outreachSubStatus.isActive) {
+    return res.status(403).json({ error: "trial_expired", message: "Your trial has ended. Upgrade to continue using Vision Strategist.", upgrade: true });
+  }
+  
+  const { lead, context } = req.body as { lead: LeadProfile; context: OutreachContext };
+  
+  // Validate required fields
+  if (!lead?.name || !lead?.title || !lead?.company) {
+    return res.status(400).json({ error: "Lead name, title, and company are required" });
+  }
+  if (!context?.service) {
+    return res.status(400).json({ error: "Context service is required" });
+  }
+  
+  // Get API key (user-specific or system)
+  const apiKeyRow = db.prepare("SELECT gemini_api_key FROM user_settings WHERE user_id = ?").get(user.id) as any;
+  const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
+  
+  if (!apiKey) {
+    return res.status(400).json({ error: "Gemini API key required. Please configure in settings." });
+  }
+  
+  // Get sender info from user profile
+  const senderInfo = db.prepare("SELECT company_name, full_name FROM users WHERE id = ?").get(user.id) as any;
+  const enrichedContext: OutreachContext = {
+    ...context,
+    senderCompany: context.senderCompany || senderInfo?.company_name || 'Our Company',
+    senderName: context.senderName || senderInfo?.full_name || outreachUser?.email?.split('@')[0] || 'The Team'
+  };
+  
+  try {
+    const result = await craftOutreach(lead, enrichedContext, apiKey);
+    res.json(result);
+  } catch (error: any) {
+    console.error('[VisionStrategist] Route error:', error.message);
+    res.status(500).json({ error: "Failed to craft outreach", message: error.message });
+  }
 });
 
 // Email: Get templates - returns user-specific templates

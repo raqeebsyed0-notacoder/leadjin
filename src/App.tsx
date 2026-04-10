@@ -6,7 +6,7 @@
 import React, { useState, useEffect, Suspense, lazy, useRef, useCallback } from 'react';
 import AdminDashboard from './AdminDashboard';
 import { landingTranslations } from './landing/landingTranslations';
-
+import { JinEmployeeDashboard } from './components/JinEmployeeDashboard';
 // Task 2G: Lazy load LandingPage for performance
 const LandingPage = lazy(() => import('./landing/LandingPage').then(m => ({ default: m.LandingPage })));
 
@@ -629,8 +629,6 @@ const translations = {
     // New keys (ar)
     dashboard: "لوحة التحكم",
     harvestTitle: "اكتشف العملاء المحتملين",
-    targetIndustry: "القطاع المستهدف",
-    geography: "المنطقة الجغرافية",
     enriching: "جاري الإثراء...",
     emailFound: "تم العثور على البريد",
     phoneFound: "تم العثور على الهاتف",
@@ -1004,6 +1002,7 @@ function AppContent() {
   });
   const [settingsTab, setSettingsTab] = useState<'general' | 'integrations' | 'outreach' | 'system'>('general');
   const [dbStats, setDbStats] = useState<any>(null);
+  const [showJinPanel, setShowJinPanel] = useState(false);
 
   // Integrations panel state
   const [enrichmentProviders, setEnrichmentProviders] = useState<{ name: string; status: string }[]>([]);
@@ -2278,6 +2277,15 @@ function AppContent() {
           />
         )}
       </AnimatePresence>
+
+      {/* Jin AI Employee Status */}
+      {authToken && (
+        <JinEmployeeDashboard 
+          isOpen={showJinPanel}
+          onToggle={() => setShowJinPanel(!showJinPanel)}
+          authToken={authToken}
+        />
+      )}
 
       {/* Trial Banner */}
       {currentUser && currentUser.subscription_status === 'trial' && (

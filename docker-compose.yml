@@ -7,13 +7,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DB_PATH: /data/leadjin.db
+      DB_PATH: /app/leadjin.db
     ports:
       - "3001:3000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - leadjin_data:/data
-
-volumes:
-  leadjin_data:
+      - ./leadjin.db:/app/leadjin.db
