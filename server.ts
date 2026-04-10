@@ -30,6 +30,19 @@ import { huntExecutives } from './src/services/linkedinHunter.js';
 import { tripleVerify } from './src/services/sovereignVerifier.js';
 import { craftOutreach, type LeadProfile, type OutreachContext } from './src/services/visionStrategist.js';
 import { ProtocolManager, type ClassifyOptions } from './src/services/protocolManager.js';
+import { 
+  initIntelligenceSchema, 
+  setIntelligenceDatabase,
+  updateLeadIntelligence,
+  getLeadPipeline,
+  getLeadScore,
+  processHuntResult,
+  processOutreachSent,
+  processReplyReceived,
+  updateVisionAlignment,
+  getPipelineMetrics,
+  type UpdateIntelligenceInput
+} from './src/services/intelligenceHub.js';
 dotenv.config();
 
 // --- FOUNDER MODE Configuration ---
@@ -272,6 +285,10 @@ try {
 }
 
 // Initialize tables (all columns consolidated — fresh DB has complete schema)
+// Initialize Intelligence Hub schema (adds new columns to leads table)
+initIntelligenceSchema(db);
+setIntelligenceDatabase(db);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS leads (
     lead_id TEXT PRIMARY KEY,
@@ -5109,6 +5126,174 @@ app.post("/api/signals/:id/dismiss", (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Intelligence Hub: CRM Schema Upgrade Routes ---
+
+// GET /api/leads/pipeline — Get all leads grouped by outreach_status
+app.get("/api/leads/pipeline", (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  try {
+    const pipeline = getLeadPipeline(user.id);
+    const metrics = getPipelineMetrics(user.id);
+    res.json({ pipeline, metrics });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Pipeline error:', error.message);
+    res.status(500).json({ error: "Failed to fetch pipeline", message: error.message });
+  }
+});
+
+// GET /api/leads/:id/score — Get composite score for a lead
+app.get("/api/leads/:id/score", (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  const { id } = req.params;
+  
+  // Verify lead belongs to user
+  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+  
+  try {
+    const score = getLeadScore(id);
+    res.json({ lead_id: id, score });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Score error:', error.message);
+    res.status(500).json({ error: "Failed to calculate score", message: error.message });
+  }
+});
+
+// PUT /api/leads/:id/intelligence — Update lead intelligence data
+app.put("/api/leads/:id/intelligence", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  const { id } = req.params;
+  const intelligenceData: UpdateIntelligenceInput = req.body;
+  
+  // Verify lead belongs to user
+  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+  
+  try {
+    const updatedLead = await updateLeadIntelligence(id, intelligenceData);
+    res.json({ status: "ok", lead: updatedLead });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Update error:', error.message);
+    res.status(500).json({ error: "Failed to update intelligence", message: error.message });
+  }
+});
+
+// POST /api/leads/:id/hunt-process — Process hunt result for a lead (Hunter → Verifier → CRM)
+app.post("/api/leads/:id/hunt-process", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  const { id } = req.params;
+  const { huntResult, options } = req.body;
+  
+  // Verify lead belongs to user
+  const lead = db.prepare("SELECT * FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+  
+  try {
+    const processed = await processHuntResult(id, huntResult, options);
+    res.json({ status: "ok", lead: processed });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Hunt process error:', error.message);
+    res.status(500).json({ error: "Failed to process hunt result", message: error.message });
+  }
+});
+
+// POST /api/leads/:id/outreach-sent — Track outreach sent (Writer → CRM)
+app.post("/api/leads/:id/outreach-sent", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  const { id } = req.params;
+  const { craftedOutreach } = req.body;
+  
+  // Verify lead belongs to user
+  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+  
+  try {
+    await processOutreachSent(id, craftedOutreach, user.id);
+    res.json({ status: "ok", message: "Outreach tracked" });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Outreach tracking error:', error.message);
+    res.status(500).json({ error: "Failed to track outreach", message: error.message });
+  }
+});
+
+// POST /api/leads/:id/reply-received — Process reply received (Reply Manager → CRM)
+app.post("/api/leads/:id/reply-received", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  const { id } = req.params;
+  const { classification, replyBody } = req.body;
+  
+  // Verify lead belongs to user
+  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+  
+  try {
+    await processReplyReceived(id, classification, replyBody);
+    res.json({ status: "ok", message: "Reply processed", classification: classification.category });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Reply processing error:', error.message);
+    res.status(500).json({ error: "Failed to process reply", message: error.message });
+  }
+});
+
+// POST /api/leads/:id/vision-alignment — Update vision alignment score
+app.post("/api/leads/:id/vision-alignment", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  const { id } = req.params;
+  const { score, primaryProgram, secondaryPrograms, reasoning } = req.body;
+  
+  // Verify lead belongs to user
+  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+  
+  try {
+    await updateVisionAlignment(id, { score, primaryProgram, secondaryPrograms, reasoning });
+    res.json({ status: "ok", message: "Vision alignment updated" });
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Vision alignment error:', error.message);
+    res.status(500).json({ error: "Failed to update vision alignment", message: error.message });
+  }
+});
+
+// GET /api/intelligence/metrics — Get pipeline metrics and analytics
+app.get("/api/intelligence/metrics", (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  
+  try {
+    const metrics = getPipelineMetrics(user.id);
+    res.json(metrics);
+  } catch (error: any) {
+    console.error('[IntelligenceHub] Metrics error:', error.message);
+    res.status(500).json({ error: "Failed to fetch metrics", message: error.message });
+  }
+});
+
 // --- Protocol Manager: Reply Classification ---
 
 // POST /api/classify-reply — Classify email reply and generate response
@@ -5136,11 +5321,12 @@ app.post("/api/classify-reply", async (req, res) => {
 
   // Get user info for context
   const userInfo = db.prepare("SELECT company_name, full_name FROM users WHERE id = ?").get(user.id) as any;
-  const classifyOptions: ClassifyOptions = {
+  const classifyOptions: ClassifyOptions & { lead_id?: string } = {
     meetingLinkPlaceholder: options?.meetingLinkPlaceholder || '[MEETING_LINK]',
     userCompanyName: options?.userCompanyName || userInfo?.company_name || 'Our Company',
     userName: options?.userName || userInfo?.full_name || 'The Team',
-    userServices: options?.userServices || 'our services'
+    userServices: options?.userServices || 'our services',
+    lead_id: options?.lead_id
   };
 
   try {
@@ -5167,6 +5353,17 @@ app.post("/api/classify-reply", async (req, res) => {
         scheduleResend: true,
         resendDate: result.extractedData.scheduledResendDate
       };
+    }
+
+    // If lead_id is provided in options, auto-process through Intelligence Hub
+    if (options?.lead_id) {
+      try {
+        await processReplyReceived(options.lead_id, result, emailBody);
+        (result as any).intelligenceHub = { processed: true, lead_id: options.lead_id };
+      } catch (ihError: any) {
+        console.warn('[ProtocolManager] Intelligence Hub processing failed:', ihError.message);
+        (result as any).intelligenceHub = { processed: false, error: ihError.message };
+      }
     }
 
     res.json(result);
