@@ -27,6 +27,7 @@ import { whatsappService } from './src/services/whatsappService.js';
 import { intentSignalService } from './src/services/intentSignals.js';
 import { createCompleteJinRouter } from './src/services/jinCompleteRoutes.js';
 import { huntExecutives } from './src/services/linkedinHunter.js';
+import { tripleVerify } from './src/services/sovereignVerifier.js';
 dotenv.config();
 
 // --- FOUNDER MODE Configuration ---
@@ -2777,6 +2778,26 @@ app.post("/api/leads/verify-website", async (req, res) => {
       final_url: result.finalUrl
     });
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Sovereign Triple Verification Endpoint ──────────────────────────────
+app.post("/api/verify-lead", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+
+  const { email, phone, linkedinUrl, name, company } = req.body;
+
+  if (!email && !phone && !linkedinUrl) {
+    return res.status(400).json({ error: "At least one of email, phone, or linkedinUrl is required" });
+  }
+
+  try {
+    const result = await tripleVerify({ email, phone, linkedinUrl, name, company });
+    res.json(result);
+  } catch (err: any) {
+    console.error("[SovereignVerifier] Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
