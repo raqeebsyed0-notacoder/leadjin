@@ -12,7 +12,19 @@
 
 import { mineSocialProfiles, extractContactsFromBioText, type SocialIntelligenceResult } from './socialIntelligence.js';
 import { generateEmailPermutations, normalizeArabicName } from './transliterationEngine.js';
-import { verifyEmail, findEmailByPermutation, detectMxProvider, detectCatchAll, recordDomainPattern, getDomainPattern, type EmailVerificationResult } from './emailVerifier.js';
+import { verifyEmailLadder, findEmailByPermutation, detectMxProvider, detectCatchAll, recordDomainPattern, getDomainPattern, type EmailVerificationResult, type EmailVerdictStatus } from './emailVerifier.js';
+
+/** Map ladder status to a numeric confidence score. */
+function verdictToConfidence(status: EmailVerdictStatus): number {
+  switch (status) {
+    case 'verified':      return 95;
+    case 'probable':      return 80;
+    case 'mx_ok':         return 55;
+    case 'unverified':    return 25;
+    case 'invalid_syntax': return 0;
+    default:              return 0;
+  }
+}
 import { discoverPhone, verifyWhatsApp, normalizePhoneNumber, type PhoneDiscoveryResult } from './phoneDiscovery.js';
 import { getCachedResult, setCachedResult } from './enrichmentCache.js';
 import { GoogleGenAI } from '@google/genai';
@@ -262,12 +274,13 @@ export async function enrichLead(input: EnrichmentInput): Promise<EnrichmentOutp
     const { firstName, lastName } = normalizeArabicName(input.name);
     const guessedEmail = applyPattern(knownPattern.pattern, firstName, lastName, domain);
     if (guessedEmail) {
-      const verification = await verifyEmail(guessedEmail);
-      if (verification.deliverable) {
+      // isGuessed=true: email was produced by pattern-inference, clamps to mx_ok max
+      const verdict = await verifyEmailLadder(guessedEmail, true, false);
+      if (verdict.status !== 'invalid_syntax' && verdict.status !== 'unverified') {
         email = guessedEmail;
-        emailConfidence = 85;
+        emailConfidence = verdictToConfidence(verdict.status);
         emailSource = 'pattern_match';
-        console.log(`[Enrichment] Pattern match hit: ${email}`);
+        console.log(`[Enrichment] Pattern match hit: ${email} (${verdict.status})`);
       }
     }
   }
@@ -303,18 +316,20 @@ export async function enrichLead(input: EnrichmentInput): Promise<EnrichmentOutp
 
   // ── Layer 2: Email Verification / Discovery ──
   if (email) {
-    // Verify email found in Layer 1
+    // Verify email found in Layer 1 — not guessed, allow live SMTP
     try {
-      const verification = await verifyEmail(email);
-      if (verification.deliverable) {
-        emailConfidence = 95;
-        emailSource = 'smtp_verified';
-        // Learn the pattern
+      const verdict = await verifyEmailLadder(email, false, true);
+      emailConfidence = verdictToConfidence(verdict.status);
+      emailSource = verdict.status === 'verified' || verdict.status === 'probable'
+        ? 'smtp_verified'
+        : (verdict.status === 'mx_ok' ? 'mx_ok' : 'unverified');
+      // Learn the domain pattern when we get a useful result
+      if (verdict.status === 'probable' || verdict.status === 'verified') {
         const pattern = detectPattern(email, domain);
-        if (pattern) recordDomainPattern(domain, pattern, verification.mxProvider);
-      } else if (verification.catchAll) {
-        emailConfidence = 50;
-        emailSource = 'catch_all_guess';
+        // detectMxProvider needed to record pattern — get it from the domain
+        detectMxProvider(domain).then(mx => {
+          if (pattern) recordDomainPattern(domain, pattern, mx);
+        }).catch(() => {});
       }
       layersUsed.push('email_verification');
     } catch (e: any) {
@@ -379,11 +394,11 @@ export async function enrichLead(input: EnrichmentInput): Promise<EnrichmentOutp
       layersUsed.push('ai_research');
 
       if (!email && aiResult.email) {
-        // Verify AI-found email before trusting
-        const verification = await verifyEmail(aiResult.email);
-        if (verification.valid) {
+        // Verify AI-found email — not guessed (AI found it on a source page), allow SMTP
+        const verdict = await verifyEmailLadder(aiResult.email, false, true);
+        if (verdict.status !== 'invalid_syntax') {
           email = aiResult.email;
-          emailConfidence = verification.deliverable ? 90 : 70;
+          emailConfidence = verdictToConfidence(verdict.status);
           emailSource = 'ai_research';
         }
       }

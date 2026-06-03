@@ -236,11 +236,9 @@ export async function updateLeadIntelligence(
     // Update confidence based on verification result
     updates.push('confidence_score = MAX(confidence_score, ?)');
     values.push(data.verificationData.confidenceScore);
-    
-    // Mark as verified if confidence is high
-    if (data.verificationData.confidenceScore >= 80) {
-      updates.push('email_verified = 1');
-    }
+    // NOTE: email_verified is NOT set here — it must come from a real ladder result
+    // (verifyEmailLadder), never from a composite confidence score.
+    // A high overall lead score (phone/social) does not make an email verified.
   }
 
   // Outreach data: track sending

@@ -19,6 +19,11 @@ export default defineConfig({
       'tests/whatsapp.test.ts',
       'tests/wa-sequences.test.ts',
       'tests/csv-upload.test.ts',
+      'tests/artisan-module3.test.ts',
+      'tests/artisan-module4.test.ts',
+      'tests/artisan-module5.test.ts',
+      'tests/artisan-modules-unit.test.ts',
+      'tests/email-ladder.test.ts',
     ],
   },
 });

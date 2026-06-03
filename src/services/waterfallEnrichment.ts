@@ -287,11 +287,13 @@ class GeminiProvider implements EnrichmentProvider {
       }
 
       console.log(`[Waterfall][Gemini] found: ${email} (confidence ${confidence})`);
+      // verified must NOT be derived from self-reported confidence score — must come from
+      // the email ladder (verifyEmailLadder) downstream, never from a confidence number.
       return {
         value: email,
         confidence,
         source: this.name,
-        verified: confidence >= 85,
+        verified: false,
       };
     } catch (e: any) {
       console.warn(`[Waterfall][Gemini] Error: ${e.message}`);
@@ -555,15 +557,11 @@ export class WaterfallEnrichment {
 
   constructor() {
     // Gemini Grounding is the primary provider (requires GEMINI_API_KEY).
-    // Apollo and Snov are secondary fallbacks if configured.
+    // ApolloProvider and SnovProvider are intentionally NOT added here (de-pay: no paid APIs).
+    // Their classes remain defined for future opt-in but are never instantiated in production.
     const gemini = new GeminiProvider();
-    const extras: EnrichmentProvider[] = [];
-    if (gemini.isConfigured()) {
-      extras.push(new ApolloProvider(), new SnovProvider());
-    }
     this.providers = [
       gemini,
-      ...extras,
       new SmtpBuiltinProvider(),
     ].sort((a, b) => a.priority - b.priority);
   }
