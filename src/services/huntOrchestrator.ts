@@ -171,7 +171,7 @@ SNIPPET: <2-3 sentences of context>
 RELEVANCE: <why this is a buying signal>`;
 
     const resp = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.1-pro-preview', // Jin's reasoning — the buying signal runs on 3.1-pro (proxy maps 'pro' → LEADJIN_MODEL)
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],

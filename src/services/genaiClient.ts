@@ -23,7 +23,8 @@ import { GoogleGenAI } from "@google/genai";
 const VERTEX_PROJECT  = process.env.VERTEX_PROJECT_ID  || "gen-lang-client-0609711713";
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION    || "global";
 const CREDS_PATH      = "/home/euphoria/.creds/vertex-express-gen-lang-client-0609711713.json";
-const LEADJIN_MODEL   = process.env.LEADJIN_MODEL || "gemini-3.1-pro-preview";
+const LEADJIN_MODEL      = process.env.LEADJIN_MODEL      || "gemini-3.1-pro-preview"; // reasoning (Jin's intelligence: buying signal)
+const LEADJIN_FAST_MODEL = process.env.LEADJIN_FAST_MODEL || "gemini-2.5-flash";        // utility/enrichment/discovery (fast, Vertex-valid)
 
 // Ensure credentials are visible to the google-auth-library at module load.
 if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
@@ -42,13 +43,16 @@ function getVertexClient(): GoogleGenAI {
   return _vertexClient;
 }
 
-// Re-point only gemini TEXT-generation models to LEADJIN_MODEL.
-// Never touch image / tts / embedding / imagen / veo / lyria / aqa ids.
+// Map gemini text models by TIER (keeps hunts fast):
+//   - a "pro" model  → LEADJIN_MODEL (gemini-3.1-pro-preview)  [reasoning: the buying signal]
+//   - flash / lite   → LEADJIN_FAST_MODEL (gemini-2.5-flash)   [discovery + enrichment, Vertex-valid]
+// image / tts / embedding / imagen / veo / lyria / aqa ids are never touched.
 function normaliseModel(model?: string): string {
-  if (!model) return LEADJIN_MODEL;
+  if (!model) return LEADJIN_FAST_MODEL;
   const m = model.toLowerCase();
   if (/(image|tts|embedding|imagen|veo|lyria|aqa)/.test(m)) return model;
-  if (m.startsWith("gemini-") || m.startsWith("models/gemini-")) return LEADJIN_MODEL;
+  if (m.includes("pro")) return LEADJIN_MODEL;
+  if (m.startsWith("gemini-") || m.startsWith("models/gemini-")) return LEADJIN_FAST_MODEL;
   return model;
 }
 
