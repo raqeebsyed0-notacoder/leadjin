@@ -24,6 +24,7 @@ export default defineConfig({
       'tests/artisan-module5.test.ts',
       'tests/artisan-modules-unit.test.ts',
       'tests/email-ladder.test.ts',
+      'tests/hunt-orchestrate.test.ts',
     ],
   },
 });

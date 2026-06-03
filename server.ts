@@ -30,6 +30,7 @@ import { createCompleteJinRouter } from './src/services/jinCompleteRoutes.js';
 import { createArtisanRouter } from './src/services/artisanRoutes.js';
 import { huntExecutives } from './src/services/linkedinHunter.js';
 import { fetchWathqLead } from './src/services/wathqService.js';
+import { huntOrchestrate, type OrchestrateInput } from './src/services/huntOrchestrator.js';
 import { tripleVerify } from './src/services/sovereignVerifier.js';
 import { craftOutreach, type LeadProfile, type OutreachContext } from './src/services/visionStrategist.js';
 import { ProtocolManager, type ClassifyOptions } from './src/services/protocolManager.js';
@@ -2996,6 +2997,62 @@ app.post("/api/hunt-wathq", async (req, res) => {
       error: "WATHQ registry lookup failed",
       message: error.message,
       cr,
+    });
+  }
+});
+
+// --- Gate-1: Hunt Orchestration (WATHQ → people → enrich → signal → store) ---
+// POST /api/hunt-orchestrate
+// Input:  { sector, geo, count?, crs? }
+//   sector — e.g. "fintech", "healthcare"
+//   geo    — e.g. "Riyadh", "Jeddah"
+//   count  — how many companies to discover (default 3, max 10)
+//   crs    — optional: skip auto-discovery, supply known CR numbers directly
+// Open route (no JWT) — mirrors /api/hunt and /api/hunt-wathq pattern.
+app.post("/api/hunt-orchestrate", async (req, res) => {
+  const { sector, geo, count, crs } = req.body as OrchestrateInput & { crs?: string[] };
+
+  if (!sector || typeof sector !== 'string' || !sector.trim()) {
+    return res.status(400).json({ error: "sector is required (e.g. fintech, healthcare)" });
+  }
+  if (!geo || typeof geo !== 'string' || !geo.trim()) {
+    return res.status(400).json({ error: "geo is required (e.g. Riyadh, Jeddah)" });
+  }
+
+  const parsedCount = typeof count === 'number'
+    ? count
+    : typeof count === 'string'
+    ? parseInt(count, 10)
+    : 3;
+  if (isNaN(parsedCount) || parsedCount < 1) {
+    return res.status(400).json({ error: "count must be a positive integer" });
+  }
+
+  // Validate crs if provided
+  if (crs !== undefined) {
+    if (!Array.isArray(crs)) {
+      return res.status(400).json({ error: "crs must be an array of 10-digit CR strings" });
+    }
+    for (const cr of crs) {
+      if (!/^\d{10}$/.test(String(cr))) {
+        return res.status(400).json({ error: `Invalid CR number: ${cr} — must be 10 digits` });
+      }
+    }
+  }
+
+  console.log(`[API/hunt-orchestrate] sector=${sector} geo=${geo} count=${parsedCount} crs=${crs ? JSON.stringify(crs) : 'auto-discover'}`);
+
+  try {
+    const result = await huntOrchestrate(
+      { sector: sector.trim(), geo: geo.trim(), count: parsedCount, crs },
+      { fetchWathqLead, enrichContact: (await import('./src/services/contactEnrichment.js')).enrichContact, db },
+    );
+    res.json(result);
+  } catch (error: any) {
+    console.error(`[API/hunt-orchestrate] Unexpected error:`, error.message);
+    res.status(500).json({
+      error: "Hunt orchestration failed",
+      message: error.message,
     });
   }
 });
