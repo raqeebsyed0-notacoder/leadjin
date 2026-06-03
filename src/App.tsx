@@ -4155,7 +4155,7 @@ function AppContent() {
                         <p className="text-[8px] uppercase tracking-widest opacity-40">{t.confidence}</p>
                         <div className="flex items-center gap-2">
                           <div className={`w-2 h-2 rounded-full ${selectedLead.confidence === 'high' ? 'bg-emerald-500' : selectedLead.confidence === 'medium' ? 'bg-amber-500' : 'bg-rose-500'}`} />
-                          <p className="text-sm font-medium uppercase tracking-wider">{selectedLead.confidence}</p>
+                          <p className="text-sm font-medium uppercase tracking-wider">{selectedLead.confidence || 'unknown'}</p>
                         </div>
                       </div>
                       <div className="glass p-4 rounded-2xl space-y-1">
@@ -4424,7 +4424,7 @@ function AppContent() {
 
                     <div className="p-5 md:p-8 bg-app-accent text-app-bg rounded-3xl space-y-1 md:space-y-2 shadow-xl">
                       <p className="text-[8px] md:text-[10px] font-bold uppercase tracking-[0.3em] opacity-60">{t.strategy}</p>
-                      <p className="text-base md:text-xl font-light leading-tight italic">"{selectedLead.outreach_recommendation}"</p>
+                      <p className="text-base md:text-xl font-light leading-tight italic">"{selectedLead.outreach_recommendation || 'No recommendation available'}"</p>
                     </div>
                   </>
                 ) : activeTab === 'interactions' ? (
@@ -4852,7 +4852,7 @@ function AppContent() {
                               <div className="flex justify-between items-start">
                                 <div>
                                   <p className="text-sm font-light">{book.summary}</p>
-                                  <p className="text-[9px] font-mono opacity-40 uppercase">{new Date(book.start_time).toLocaleString()}</p>
+                                  <p className="text-[9px] font-mono opacity-40 uppercase">{book.start_time ? new Date(book.start_time).toLocaleString() : 'Time TBD'}</p>
                                 </div>
                                 <span className="px-2 py-1 rounded-full text-[8px] font-bold uppercase tracking-widest bg-app-accent/20 text-app-accent">
                                   {book.status}
