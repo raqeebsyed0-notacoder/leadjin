@@ -4169,7 +4169,7 @@ function AppContent() {
                     <div className="space-y-4 md:space-y-6">
                       <h4 className="text-[9px] md:text-[10px] font-bold uppercase tracking-[0.4em] opacity-40">{t.score}</h4>
                       <div className="grid grid-cols-2 gap-3 md:gap-6">
-                        {Object.entries(selectedLead.score_breakdown).map(([key, val]) => (
+                        {Object.entries(selectedLead.score_breakdown || {}).map(([key, val]) => (
                           <div key={key} className="glass p-3 md:p-6 rounded-2xl space-y-2 md:space-y-3">
                             <p className="text-[8px] md:text-[9px] uppercase tracking-widest opacity-40 truncate">{key.replace('_', ' ')}</p>
                             <div className="flex items-center justify-between gap-2">
@@ -4414,7 +4414,7 @@ function AppContent() {
                     <div className="space-y-4 md:space-y-6">
                       <h4 className="text-[9px] md:text-[10px] font-bold uppercase tracking-[0.4em] opacity-40">{t.pain}</h4>
                       <div className="flex flex-wrap gap-2 md:gap-3">
-                        {selectedLead.pain_signals.map(signal => (
+                        {(selectedLead.pain_signals || []).map(signal => (
                           <span key={signal} className="px-3 md:px-5 py-1.5 md:py-2 glass rounded-full text-[8px] md:text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 md:gap-3">
                             <AlertCircle size={10} className="opacity-40" /> {signal}
                           </span>
