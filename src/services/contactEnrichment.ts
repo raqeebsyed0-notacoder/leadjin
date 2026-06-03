@@ -265,6 +265,25 @@ SOURCE: <url or NONE>`;
   }
 }
 
+/**
+ * Anti-fake guard: a grounding-model citation is NOT proof. Fetch the cited page
+ * and confirm the email string actually appears in its HTML before trusting it.
+ * Returns false on any fetch failure (fail-closed).
+ */
+export async function confirmEmailOnPage(url: string, email: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LeadJin/1.0)' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return false;
+    const html = (await res.text()).toLowerCase();
+    return html.includes(email.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Step 4: Pattern-guess ladder (guessed ceiling = mx_ok always)
 // ---------------------------------------------------------------------------
@@ -402,26 +421,31 @@ export async function enrichContact(input: {
   if (!alreadyPublic) {
     const grounded = await groundedPersonEmailSearch(name, company, domain);
     if (grounded) {
-      // A grounded email with a real citation is "probable" at best if we can't
-      // confirm the exact string on the page — but if we have a citation URL we
-      // treat it as public (cited source). The model must have found it with search.
-      // CAVEAT: we trust the grounding model's citation as the source of truth.
-      // This is the fairest achievable rung for a grounded-search result.
       const candidate = grounded.email;
-      const candidateRung: ContactRung = 'probable'; // We have a citation but haven't confirmed via SMTP
-      // Run through ladder non-guessed to see if we can promote to verified/probable
-      const ladderResult = await verifyEmailLadder(candidate, false, true);
-      const ladderRung = ladderStatusToRung(ladderResult.status);
-      // Pick whichever is better: our own "probable" from citation OR the ladder result
-      const resolvedRung = RUNG_RANK[ladderRung] >= RUNG_RANK[candidateRung] ? ladderRung : candidateRung;
-
-      if (RUNG_RANK[resolvedRung] > RUNG_RANK[bestRung] ||
-          (resolvedRung === bestRung && !bestEmail)) {
-        bestEmail = candidate;
-        bestRung = resolvedRung;
-        bestSources = [grounded.citationUrl];
-        noteParts.push(`Grounded search citation: ${grounded.citationUrl}`);
-        noteParts.push(`Ladder: ${ladderResult.evidence}`);
+      // HARD anti-fake: a model citation is NOT proof. Fetch the cited page and
+      // confirm the email string is actually on it before granting any rung.
+      const onPage = await confirmEmailOnPage(grounded.citationUrl, candidate);
+      if (onPage) {
+        // Literally published on a real, confirmed page → public, with the real source.
+        if (RUNG_RANK['public'] > RUNG_RANK[bestRung] || (bestRung === 'public' && !bestEmail)) {
+          bestEmail = candidate;
+          bestRung = 'public';
+          bestSources = [grounded.citationUrl];
+          noteParts.push(`Grounded + page-confirmed: ${candidate} found on ${grounded.citationUrl}`);
+        }
+      } else {
+        // Citation unconfirmed (email not on the page, or page unreachable) → the
+        // grounded email is unproven. Ladder it as a GUESS (isGuessed=true → capped mx_ok),
+        // so a hallucinated citation can NEVER elevate above mx_ok.
+        const ladderResult = await verifyEmailLadder(candidate, true, true);
+        const ladderRung = ladderStatusToRung(ladderResult.status);
+        if (RUNG_RANK[ladderRung] > RUNG_RANK[bestRung]) {
+          bestEmail = candidate;
+          bestRung = ladderRung;
+          bestSources = [`grounded-unconfirmed:${grounded.citationUrl}`];
+          noteParts.push(`Grounded email ${candidate} cited at ${grounded.citationUrl} but NOT found on that page — treated as unverified guess (max mx_ok)`);
+          noteParts.push(`Ladder: ${ladderResult.evidence}`);
+        }
       }
     }
   }
