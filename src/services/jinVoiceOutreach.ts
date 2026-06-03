@@ -9,6 +9,7 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { randomUUID } from 'crypto';
+import { getGenAI } from './genaiClient.js';
 
 export interface OutreachTemplate {
   id: string;
@@ -117,7 +118,7 @@ const SAUDI_ETIQUETTE = {
 };
 
 /**
- * Generate strategic outreach email using Gemini 1.5 Pro
+ * Generate strategic outreach email using Gemini 2.5 Flash
  */
 export async function generateStrategicOutreach(
   stakeholder: {
@@ -142,7 +143,7 @@ export async function generateStrategicOutreach(
   },
   apiKey: string
 ): Promise<GeneratedOutreach> {
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = getGenAI(apiKey);
 
   // Determine relevant Vision 2030 programs
   const relevantPrograms = VISION_2030_PROGRAMS.filter(program =>
@@ -201,7 +202,7 @@ RESPONSE FORMAT (JSON):
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-1.5-pro-latest',
+      model: 'gemini-2.5-flash',
       contents: prompt,
       config: { responseMimeType: 'application/json' }
     });
@@ -300,7 +301,7 @@ export async function analyzeReply(
     return basicReplyAnalysis(emailContent, subject);
   }
 
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = getGenAI(apiKey);
 
   const prompt = `You are Jin, analyzing an email response in a Saudi business context.
 
@@ -443,7 +444,7 @@ export async function generateFollowUp(
     return generateBasicFollowUp(replyAnalysis, sender);
   }
 
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = getGenAI(apiKey);
 
   const prompt = `Generate a follow-up email based on the prospect's reply analysis.
 

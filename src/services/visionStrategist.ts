@@ -6,6 +6,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
+import { getGenAI } from './genaiClient.js';
 
 export interface LeadProfile {
   name: string;
@@ -57,7 +58,7 @@ export class VisionStrategist {
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
-    this.ai = new GoogleGenAI({ apiKey });
+    this.ai = getGenAI(apiKey);
   }
 
   /**

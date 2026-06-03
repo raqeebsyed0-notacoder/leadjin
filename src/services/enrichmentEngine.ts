@@ -16,6 +16,7 @@ import { verifyEmail, findEmailByPermutation, detectMxProvider, detectCatchAll, 
 import { discoverPhone, verifyWhatsApp, normalizePhoneNumber, type PhoneDiscoveryResult } from './phoneDiscovery.js';
 import { getCachedResult, setCachedResult } from './enrichmentCache.js';
 import { GoogleGenAI } from '@google/genai';
+import { getGenAI } from './genaiClient.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -104,11 +105,8 @@ interface AIResearchResult {
 }
 
 async function aiResearchFallback(name: string, company: string, domain?: string, missingFields?: string[]): Promise<AIResearchResult> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return {};
-
   try {
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = getGenAI();
     const missing = missingFields?.join(', ') || 'email, phone, LinkedIn URL';
 
     const prompt = `Find the PERSONAL/DIRECT contact details for ${name} at ${company}${domain ? ` (${domain})` : ''}. Missing: ${missing}.

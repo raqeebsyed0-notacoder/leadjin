@@ -6,6 +6,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
+import { getGenAI } from './genaiClient.js';
 
 export type ReplyCategory = 'INTERESTED' | 'NOT_INTERESTED' | 'OOO' | 'QUESTION' | 'REFERRAL';
 
@@ -36,10 +37,10 @@ export interface ClassifyOptions {
 export class ProtocolManager {
   private ai: GoogleGenAI;
   private apiKey: string;
-  
+
   constructor(apiKey: string) {
     this.apiKey = apiKey;
-    this.ai = new GoogleGenAI({ apiKey });
+    this.ai = getGenAI(apiKey);
   }
 
   /**
@@ -105,7 +106,7 @@ Response guidelines by category:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });
@@ -254,7 +255,7 @@ Email body:`;
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash',
         contents: prompt
       });
       
@@ -294,7 +295,7 @@ Email body:`;
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash',
         contents: prompt
       });
       
@@ -331,7 +332,7 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });

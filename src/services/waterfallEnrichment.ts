@@ -3,17 +3,21 @@
  *
  * Queries multiple data providers sequentially (by priority) until a verified
  * contact is found — email first, then phone.  If no providers are configured
- * the service returns null and the caller should fall back to Gemini.
+ * the service returns null.
  *
  * Providers (lowest priority number = tried first):
- *   1. Hunter.io  (HUNTER_API_KEY)
- *   2. Apollo.io  (APOLLO_API_KEY)
- *   3. Snov.io    (SNOV_API_KEY + SNOV_API_SECRET)
- *   4. SMTP MX verifier (always available, used for verification only)
+ *   1. Gemini Grounding  (GEMINI_API_KEY) — Google Search grounded email discovery
+ *   2. Apollo.io          (APOLLO_API_KEY)
+ *   3. Snov.io            (SNOV_API_KEY + SNOV_API_SECRET)
+ *   4. SMTP MX verifier   (always available, used for verification only)
+ *
+ * Hunter.io has been replaced by Gemini Grounding (2026-06-02).
  */
 
 import dns from 'dns/promises';
 import net from 'net';
+import { GoogleGenAI } from '@google/genai';
+import { getGenAI } from './genaiClient.js';
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -230,83 +234,114 @@ class SmtpBuiltinProvider implements EnrichmentProvider {
 }
 
 // ---------------------------------------------------------------------------
-// Provider: Hunter.io
+// Provider: Gemini Grounding
 // ---------------------------------------------------------------------------
 
-class HunterProvider implements EnrichmentProvider {
-  name = 'hunter';
+class GeminiProvider implements EnrichmentProvider {
+  name = 'gemini';
   priority = 10;
 
   isConfigured(): boolean {
-    return !!process.env.HUNTER_API_KEY;
-  }
-
-  private get apiKey(): string {
-    return process.env.HUNTER_API_KEY!;
+    return !!process.env.GEMINI_API_KEY;
   }
 
   async findEmail(params: ContactInput): Promise<EnrichmentResult | null> {
-    const { firstName, lastName } = splitName(params.name);
     const domain = params.domain || extractDomain(params.company);
-
-    const url = `https://api.hunter.io/v2/email-finder?domain=${encodeURIComponent(domain)}&first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName)}&api_key=${this.apiKey}`;
-
     try {
-      console.log(`[Waterfall][Hunter] Looking up email for ${params.name} at ${domain}`);
-      const res = await fetch(url);
-      if (!res.ok) {
-        console.log(`[Waterfall][Hunter] HTTP ${res.status} — not-found`);
+      console.log(`[Waterfall][Gemini] Searching email for ${params.name} at ${domain || params.company}`);
+
+      const ai = getGenAI();
+      const prompt =
+        `Find the PERSONAL/DIRECT work email address for ${params.name} who works at ${params.company}${domain ? ` (${domain})` : ''}. ` +
+        `I need their specific individual email (like firstname.lastname@company.com), NOT a generic address like info@, contact@, support@, sales@, or admin@.\n\n` +
+        `Search Google for "${params.name}" "${params.company}" email — look for their profile page, team page, or directory listing that includes their direct email.\n` +
+        `If you cannot find their exact email, search for the company's email pattern (e.g., firstname.lastname@domain) and generate the most likely address.\n\n` +
+        `Return ONLY valid JSON (no markdown):\n` +
+        `{"email": "personal email or empty string", "confidence": 0-100, "email_pattern_used": "pattern description or empty string", "source_urls": ["url1"]}\n\n` +
+        `CRITICAL: confidence must be >= 85 if the email was found on a verified source like LinkedIn, company team page, or public directory. ` +
+        `Confidence should be 50-70 if it's a generated/pattern-based guess. Return 0 confidence and empty email if you genuinely cannot find anything.`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          tools: [{ googleSearch: {} }],
+          temperature: 0,
+        },
+      });
+
+      const text = response.text || '';
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.log(`[Waterfall][Gemini] No JSON in response for ${params.name}`);
         return null;
       }
 
-      const json = await res.json() as any;
-      const data = json?.data;
-      if (!data?.email) {
-        console.log(`[Waterfall][Hunter] not-found for ${params.name}`);
+      const parsed = JSON.parse(jsonMatch[0]);
+      const email = parsed.email?.trim();
+      const confidence = Math.min(100, Math.max(0, parsed.confidence || 0));
+
+      if (!email || !email.includes('@') || confidence < 30) {
+        console.log(`[Waterfall][Gemini] No valid email found for ${params.name}`);
         return null;
       }
 
-      const confidence = data.score ?? 50;
-      console.log(`[Waterfall][Hunter] found: ${data.email} (confidence ${confidence})`);
+      console.log(`[Waterfall][Gemini] found: ${email} (confidence ${confidence})`);
       return {
-        value: data.email,
+        value: email,
         confidence,
         source: this.name,
-        verified: confidence >= 90,
+        verified: confidence >= 85,
       };
     } catch (e: any) {
-      console.warn(`[Waterfall][Hunter] Error: ${e.message}`);
-      return null;
+      console.warn(`[Waterfall][Gemini] Error: ${e.message}`);
+      // Fallback: try knowledge-only (no grounding) in case of rate limit
+      try {
+        return await this.findEmailFallbackKnowledge(params, domain);
+      } catch {
+        return null;
+      }
     }
+  }
+
+  private async findEmailFallbackKnowledge(params: ContactInput, domain: string): Promise<EnrichmentResult | null> {
+    const ai = getGenAI();
+    const prompt =
+      `What is a likely professional email address for ${params.name} at ${params.company} (${domain || 'unknown domain'})?\n` +
+      `Based on common email patterns at this company (e.g., first.last@domain, flast@domain, first@domain), ` +
+      `return ONLY valid JSON:\n{"email": "generated email or empty string", "confidence": 0-100, "pattern": "pattern name"}\n\n` +
+      `Only respond if you know the company's real email pattern. Otherwise return {"email": "", "confidence": 0}.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: { temperature: 0 },
+    });
+
+    const text = response.text || '';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    const email = parsed.email?.trim();
+    const confidence = Math.min(100, Math.max(0, parsed.confidence || 0));
+
+    if (!email || !email.includes('@') || confidence < 40) return null;
+
+    return {
+      value: email,
+      confidence: Math.round(confidence * 0.8), // Penalize knowledge-only guesses
+      source: this.name,
+      verified: false,
+    };
   }
 
   async findPhone(_params: ContactInput): Promise<EnrichmentResult | null> {
-    // Hunter.io does not provide phone numbers
     return null;
   }
 
-  async verifyEmail(email: string): Promise<VerificationResult> {
-    const url = `https://api.hunter.io/v2/email-verifier?email=${encodeURIComponent(email)}&api_key=${this.apiKey}`;
-
-    try {
-      console.log(`[Waterfall][Hunter] Verifying ${email}`);
-      const res = await fetch(url);
-      if (!res.ok) return { valid: false, deliverable: false, catchAll: false, source: this.name };
-
-      const json = await res.json() as any;
-      const data = json?.data;
-      if (!data) return { valid: false, deliverable: false, catchAll: false, source: this.name };
-
-      return {
-        valid: data.status !== 'invalid',
-        deliverable: data.result === 'deliverable',
-        catchAll: data.result === 'risky' || data.status === 'accept_all',
-        source: this.name,
-      };
-    } catch (e: any) {
-      console.warn(`[Waterfall][Hunter] Verify error: ${e.message}`);
-      return { valid: false, deliverable: false, catchAll: false, source: this.name };
-    }
+  async verifyEmail(_email: string): Promise<VerificationResult> {
+    return { valid: false, deliverable: false, catchAll: false, source: this.name };
   }
 }
 
@@ -519,10 +554,16 @@ export class WaterfallEnrichment {
   private providers: EnrichmentProvider[];
 
   constructor() {
+    // Gemini Grounding is the primary provider (requires GEMINI_API_KEY).
+    // Apollo and Snov are secondary fallbacks if configured.
+    const gemini = new GeminiProvider();
+    const extras: EnrichmentProvider[] = [];
+    if (gemini.isConfigured()) {
+      extras.push(new ApolloProvider(), new SnovProvider());
+    }
     this.providers = [
-      new HunterProvider(),
-      new ApolloProvider(),
-      new SnovProvider(),
+      gemini,
+      ...extras,
       new SmtpBuiltinProvider(),
     ].sort((a, b) => a.priority - b.priority);
   }

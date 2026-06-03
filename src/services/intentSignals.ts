@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import { getGenAI } from "./genaiClient.js";
 import { jsonrepair } from "jsonrepair";
 
 export interface IntentSignal {
@@ -23,9 +24,7 @@ class IntentSignalService {
   private cache = new Map<string, CacheEntry>();
 
   private getAI(): GoogleGenAI {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
-    return new GoogleGenAI({ apiKey });
+    return getGenAI();
   }
 
   private getCached(key: string): IntentSignal[] | null {

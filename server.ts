@@ -19,6 +19,7 @@ import cors from "cors";
 import dns from 'dns/promises';
 import net from 'net';
 import { generateLeadjinLeads } from "./src/services/geminiService.js";
+import { getGenAI } from "./src/services/genaiClient.js";
 import { waterfallEnrichment } from './src/services/waterfallEnrichment.js';
 import { enrichLead, enqueueEnrichment, enrichBatch, getQueueItem, getEnrichmentStats, type EnrichmentInput, setDatabase } from './src/services/enrichmentEngine.js';
 import { initPreCrawlTables, runPreCrawlBatch, getPreCrawlStats, lookupCompany, lookupPerson, searchPeople, startPerpetualCrawl, runDailyVerification, KSA_CITIES, INDUSTRIES, CRAWL_PHASES } from './src/services/preCrawler.js';
@@ -1346,8 +1347,7 @@ async function enrichLeadEmail(
 
   // ── STEP 1: Gemini Google Search for public email ──────────────────────────
   try {
-    const { GoogleGenAI } = await import("@google/genai");
-    const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+    const ai = getGenAI(geminiApiKey);
     const searchPrompt = `Search Google for the email address of "${lead.name}", ${lead.title} at "${lead.company}".
 
 Search specifically:
@@ -1383,8 +1383,7 @@ Return ONLY the email address found. If multiple found, return the one most like
   // ── STEP 1b: Use Gemini to find actual company domain ────────────────────
   if (!domain && lead.company) {
     try {
-      const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+      const ai = getGenAI(geminiApiKey);
       const domainPrompt = `What is the official website domain for "${lead.company}"? Return ONLY the domain name (e.g., "aramco.com" for Saudi Aramco), nothing else. If unknown, return NULL.`;
       const domainRes = await ai.models.generateContent({
         model: "gemini-flash-lite-latest",
@@ -1597,9 +1596,8 @@ async function verifyWebsite(url: string): Promise<{reachable: boolean, status: 
 // Task 1D: LinkedIn URL Discovery
 async function discoverLinkedIn(name: string, company: string, apiKey: string): Promise<string | null> {
   try {
-    const { GoogleGenAI } = await import("@google/genai");
-    const ai = new GoogleGenAI({ apiKey });
-    
+    const ai = getGenAI(apiKey);
+
     const searchPrompt = `Search Google for LinkedIn profile of "${name}" at "${company}".
 Search query: site:linkedin.com/in "${name}" "${company}"
 
@@ -4293,13 +4291,15 @@ app.post("/api/quotations/suggest-price", async (req, res) => {
     return res.json({ ...cached.result, cached: true });
   }
   
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
-  
+  if (!process.env.GEMINI_API_KEY && process.env.LEADJIN_USE_VERTEX !== "false") {
+    // Vertex path doesn't need GEMINI_API_KEY — proceed
+  } else if (!process.env.GEMINI_API_KEY) {
+    return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
+  }
+
   try {
-    const { GoogleGenAI } = await import("@google/genai");
-    const ai = new GoogleGenAI({ apiKey });
-    
+    const ai = getGenAI();
+
     const prompt = `You are a GCC B2B pricing expert. Given a ${lead_company_size || 'mid-size'} company in ${lead_industry || 'technology'} industry in ${lead_country || 'Saudi Arabia'}, suggest a realistic price range in SAR for: ${service_name}.
 
 ${user_services_desc ? `Context about the service provider: ${user_services_desc}` : ''}

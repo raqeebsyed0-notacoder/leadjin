@@ -1,4 +1,5 @@
-import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
+import { ThinkingLevel, Type } from "@google/genai";
+import { getGenAI } from "./genaiClient.js";
 import { jsonrepair } from "jsonrepair";
 
 export interface LeadjinLead {
@@ -95,11 +96,8 @@ export const generateLeadjinLeads = async (params: {
   vision2030?: boolean;
   emailTemplate?: { subject: string; body: string };
 }) => {
-  const apiKey = params.userApiKey || (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : undefined);
-  if (!apiKey) {
-    throw new Error("No API key provided. Please add your Gemini API key in settings.");
-  }
-  const ai = new GoogleGenAI({ apiKey });
+  // Pass userApiKey only when it is a genuine per-user key (factory ignores env-key echoes).
+  const ai = getGenAI(params.userApiKey);
 
   const servicesContext = params.targetServices && params.targetServices.length > 0
     ? `Services needed: ${params.targetServices.join(", ")}.`

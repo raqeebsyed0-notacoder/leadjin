@@ -1,7 +1,7 @@
 /**
  * Module 2: The Employee's Eyes (Stealth Extraction)
  * 
- * Jin's stealth extraction service - uses Puppeteer and Gemini 1.5 Pro
+ * Jin's stealth extraction service - uses Puppeteer and Gemini 2.5 Flash
  * to autonomously discover Saudi stakeholders and their verified contact data.
  * 
  * This is Jin's "vision" - he can see and extract intelligence from:
@@ -14,6 +14,7 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 import type { LaunchOptions } from 'puppeteer';
 import { GoogleGenAI } from '@google/genai';
+import { getGenAI } from './genaiClient.js';
 import { randomUUID } from 'crypto';
 
 // Types for Jin's extraction results
@@ -124,14 +125,14 @@ function logAction(job: JinExtractionJob, action: string, details: string, statu
 }
 
 /**
- * Use Gemini 1.5 Pro to analyze company and identify key stakeholders
+ * Use Gemini 2.5 Flash to analyze company and identify key stakeholders
  */
 async function analyzeCompanyWithGemini(
   domain: string,
   companyName: string | undefined,
   apiKey: string
 ): Promise<Array<{ name: string; title: string; relevance: number }>> {
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = getGenAI(apiKey);
   
   const prompt = `You are Jin, a Regional Intelligence Specialist for the Saudi Arabian market. 
 
@@ -167,7 +168,7 @@ If you cannot find real names, return an empty array []. Do not make up names.`;
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-1.5-pro-latest',
+      model: 'gemini-2.5-flash',
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
@@ -499,7 +500,7 @@ export async function runStealthExtraction(
     // Step 1: Analyze company with Gemini
     job.status = 'extracting';
     job.progress = 10;
-    logAction(job, 'Intelligence Gathering', `Analyzing ${job.domain} with Gemini 1.5 Pro...`, 'info');
+    logAction(job, 'Intelligence Gathering', `Analyzing ${job.domain} with Gemini 2.5 Flash...`, 'info');
     
     const geminiResults = await analyzeCompanyWithGemini(
       job.domain,

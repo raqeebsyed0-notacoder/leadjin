@@ -13,6 +13,7 @@
  */
 
 import { GoogleGenAI } from "@google/genai";
+import { getGenAI } from "./genaiClient.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -92,17 +93,7 @@ export async function mineSocialProfiles(
 ): Promise<SocialIntelligenceResult> {
   const emptyResult: SocialIntelligenceResult = { sources: [] };
 
-  const apiKey =
-    typeof process !== "undefined"
-      ? process.env?.GEMINI_API_KEY
-      : undefined;
-
-  if (!apiKey) {
-    console.warn("[SocialIntelligence] No GEMINI_API_KEY — skipping social mining");
-    return emptyResult;
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = getGenAI();
 
   const domainHint = domain ? `Their website is ${domain}.` : "";
 

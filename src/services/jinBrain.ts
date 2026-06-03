@@ -1,11 +1,12 @@
 /**
  * Module 1: The Employee's Brain (Autonomous Reasoning)
  * 
- * Jin's decision-making engine powered by Gemini 1.5 Pro.
+ * Jin's decision-making engine powered by Gemini 2.5 Flash.
  * Handles autonomous reasoning about leads, timing, and strategic decisions.
  */
 
 import { GoogleGenAI } from '@google/genai';
+import { getGenAI } from './genaiClient.js';
 
 export interface JinDecision {
   decision: 'proceed' | 'wait' | 'escalate' | 'decline';
@@ -40,10 +41,10 @@ export interface OutreachContext {
 export class JinBrain {
   private ai: GoogleGenAI;
   private apiKey: string;
-  
+
   constructor(apiKey: string) {
     this.apiKey = apiKey;
-    this.ai = new GoogleGenAI({ apiKey });
+    this.ai = getGenAI(apiKey);
   }
   
   /**
@@ -84,7 +85,7 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-1.5-pro-latest',
+        model: 'gemini-2.5-flash',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });
@@ -147,7 +148,7 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-1.5-pro-latest',
+        model: 'gemini-2.5-flash',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });
@@ -196,7 +197,7 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-1.5-pro-latest',
+        model: 'gemini-2.5-flash',
         contents: prompt,
         config: { 
           tools: [{ googleSearch: {} }],

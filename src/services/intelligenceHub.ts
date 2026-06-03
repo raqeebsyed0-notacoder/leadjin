@@ -10,6 +10,7 @@
 
 import type { Database } from 'better-sqlite3';
 import { GoogleGenAI } from '@google/genai';
+import { getGenAI } from './genaiClient.js';
 import type { HuntResult, ExecutiveProfile } from './linkedinHunter.js';
 import type { SovereignVerificationResult, LeadIdentity } from './sovereignVerifier.js';
 import type { CraftedOutreach, LeadProfile, OutreachContext } from './visionStrategist.js';
@@ -155,6 +156,8 @@ const INTELLIGENCE_COLUMNS = [
   'last_contacted_at DATETIME',
   'reply_category TEXT',
   'vision_alignment_score REAL DEFAULT 0',
+  'interaction_history TEXT DEFAULT "[]"',
+  'last_interaction_at DATETIME',
 ];
 
 /**
@@ -248,7 +251,7 @@ export async function updateLeadIntelligence(
     }
     
     // Only update status if currently 'new' (don't overwrite replies)
-    updates.push('outreach_status = CASE WHEN outreach_status = "new" THEN "contacted" ELSE outreach_status END');
+    updates.push("outreach_status = CASE WHEN outreach_status = 'new' THEN 'contacted' ELSE outreach_status END");
   }
 
   // Reply data: classification and status update
@@ -746,9 +749,9 @@ export async function getLeadScoreAI(
   
   const engagement = calculateEngagementMetrics(leadId);
   const history = getRelationshipHistory(leadId);
-  
-  const ai = new GoogleGenAI({ apiKey });
-  
+
+  const ai = getGenAI(apiKey);
+
   const prompt = `You are a CRM intelligence expert. Analyze this lead and provide an AI-enhanced scoring assessment.
 
 LEAD PROFILE:
@@ -885,8 +888,8 @@ export async function getNextAction(
   }
   
   // Use Gemini for intelligent recommendation
-  const ai = new GoogleGenAI({ apiKey });
-  
+  const ai = getGenAI(apiKey);
+
   const prompt = `You are a CRM intelligence expert. Analyze this lead and recommend the next best action.
 
 LEAD PROFILE:

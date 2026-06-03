@@ -17,6 +17,7 @@
 
 import { GoogleGenAI } from '@google/genai';
 import dns from 'dns/promises';
+import { getGenAI } from './genaiClient.js';
 import net from 'net';
 
 // ---------------------------------------------------------------------------
@@ -323,7 +324,7 @@ export async function crawlCityIndustry(
   apiKey: string,
 ): Promise<CrawlJobResult> {
   const startTime = Date.now();
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = getGenAI(apiKey);
 
   console.log(`[PreCrawler] Crawling: ${city} × ${industry}`);
 
