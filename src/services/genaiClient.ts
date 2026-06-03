@@ -1,21 +1,21 @@
 /**
- * Shared GoogleGenAI client factory.
+ * Shared GoogleGenAI client — AI STUDIO primary, VERTEX fallback, on gemini-3.1-pro.
  *
- * DEFAULT behaviour (LEADJIN_USE_VERTEX not set, or set to "true"):
- *   → Vertex AI via service-account credentials (uncapped, no 429).
+ * Raqeeb 2026-06-03: "run Jin in studio ai 3.1 pro, and fallback as vertex 3.1 pro as well."
  *
- * EXPLICIT opt-out (LEADJIN_USE_VERTEX=false):
- *   → Gemini API key path.
+ * getGenAI() returns a GoogleGenAI-shaped proxy. Every `.models.generateContent`
+ * (and `generateContentStream`) call:
+ *   1. is normalised to LEADJIN_MODEL (default gemini-3.1-pro-preview) for gemini
+ *      TEXT models — image / tts / embedding / imagen / veo / lyria ids are left as-is;
+ *   2. is tried on the AI-Studio key path FIRST (process.env.GEMINI_API_KEY);
+ *   3. on ANY error (429 / 5xx / network / quota) transparently RETRIES on Vertex
+ *      (service-account, uncapped) with the same params.
+ * Every other client surface passes straight through to the primary client.
  *
- * Per-user override logic:
- *   Pass a userApiKey ONLY when it is a genuine per-user key (i.e. it is
- *   truthy AND different from the server-level GEMINI_API_KEY). When it is
- *   just the env key being forwarded as a variable, DO NOT pass it — call
- *   getGenAI() with no argument so Vertex is used.
+ * Per-user override: a genuine per-user key (truthy AND != server GEMINI_API_KEY)
+ * is used as the primary; it still falls back to Vertex on error.
  *
- * Call sites that DO have a real per-user key (e.g. from a decrypted DB row
- * that differs from process.env.GEMINI_API_KEY) may pass it explicitly and
- * will get the apiKey path for that single call.
+ * Both legs verified live 2026-06-03: gemini-3.1-pro-preview → PONG on AI Studio AND Vertex.
  */
 
 import { GoogleGenAI } from "@google/genai";
@@ -23,19 +23,14 @@ import { GoogleGenAI } from "@google/genai";
 const VERTEX_PROJECT  = process.env.VERTEX_PROJECT_ID  || "gen-lang-client-0609711713";
 const VERTEX_LOCATION = process.env.VERTEX_LOCATION    || "global";
 const CREDS_PATH      = "/home/euphoria/.creds/vertex-express-gen-lang-client-0609711713.json";
+const LEADJIN_MODEL   = process.env.LEADJIN_MODEL || "gemini-3.1-pro-preview";
 
 // Ensure credentials are visible to the google-auth-library at module load.
 if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
   process.env.GOOGLE_APPLICATION_CREDENTIALS = CREDS_PATH;
 }
 
-// true  = use Vertex (default when env var is absent or set to "true")
-// false = use Gemini API key (explicit opt-out)
-const useVertex = process.env.LEADJIN_USE_VERTEX !== "false";
-
-// Singleton Vertex client — reused across all call sites.
 let _vertexClient: GoogleGenAI | null = null;
-
 function getVertexClient(): GoogleGenAI {
   if (!_vertexClient) {
     _vertexClient = new GoogleGenAI({
@@ -47,27 +42,80 @@ function getVertexClient(): GoogleGenAI {
   return _vertexClient;
 }
 
+// Re-point only gemini TEXT-generation models to LEADJIN_MODEL.
+// Never touch image / tts / embedding / imagen / veo / lyria / aqa ids.
+function normaliseModel(model?: string): string {
+  if (!model) return LEADJIN_MODEL;
+  const m = model.toLowerCase();
+  if (/(image|tts|embedding|imagen|veo|lyria|aqa)/.test(m)) return model;
+  if (m.startsWith("gemini-") || m.startsWith("models/gemini-")) return LEADJIN_MODEL;
+  return model;
+}
+
+function withModel<T extends { model?: string }>(params: T): T {
+  if (!params || typeof params !== "object") return params;
+  return { ...params, model: normaliseModel((params as any).model) };
+}
+
+// Wrap a primary client: generateContent / generateContentStream get
+// model-normalisation + Vertex fallback; everything else passes through.
+function wrapWithFallback(primary: GoogleGenAI): GoogleGenAI {
+  const modelsProxy = new Proxy((primary as any).models, {
+    get(target, prop, recv) {
+      if (prop === "generateContent") {
+        return async (params: any) => {
+          const p = withModel(params);
+          try {
+            return await target.generateContent(p);
+          } catch (err) {
+            console.warn(`[genaiClient] AI-Studio primary failed (${String((err as any)?.message || err).slice(0, 80)}) → Vertex fallback on ${p?.model}`);
+            return await getVertexClient().models.generateContent(p);
+          }
+        };
+      }
+      if (prop === "generateContentStream") {
+        return async (params: any) => {
+          const p = withModel(params);
+          try {
+            return await target.generateContentStream(p);
+          } catch (err) {
+            console.warn(`[genaiClient] AI-Studio primary stream failed → Vertex fallback on ${p?.model}`);
+            return await getVertexClient().models.generateContentStream(p);
+          }
+        };
+      }
+      const v = Reflect.get(target, prop, recv);
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  });
+
+  return new Proxy(primary, {
+    get(target, prop, recv) {
+      if (prop === "models") return modelsProxy;
+      const v = Reflect.get(target, prop, recv);
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  }) as GoogleGenAI;
+}
+
 /**
- * Returns a configured GoogleGenAI instance.
+ * Returns a configured GoogleGenAI proxy (AI-Studio primary → Vertex fallback).
  *
- * @param userApiKey  A genuine per-user key that DIFFERS from the server env
- *                    key. If absent, falsy, or equal to GEMINI_API_KEY, the
- *                    Vertex path is used (regardless of LEADJIN_USE_VERTEX).
+ * @param userApiKey A genuine per-user key that DIFFERS from the server env key.
+ *                   If absent / falsy / equal to GEMINI_API_KEY, the server
+ *                   AI-Studio key is the primary (Vertex on failure).
  */
 export function getGenAI(userApiKey?: string): GoogleGenAI {
-  // A "genuine" per-user override is truthy AND differs from the server env key.
   const envKey = process.env.GEMINI_API_KEY;
   const isGenuineUserKey = !!userApiKey && userApiKey !== envKey;
 
   if (isGenuineUserKey) {
-    // Per-user override: honour it with the apiKey path even in vertex mode.
-    return new GoogleGenAI({ apiKey: userApiKey });
+    return wrapWithFallback(new GoogleGenAI({ apiKey: userApiKey as string }));
   }
-
-  if (useVertex) {
-    return getVertexClient();
+  if (envKey) {
+    // AI Studio primary on the server key.
+    return wrapWithFallback(new GoogleGenAI({ apiKey: envKey }));
   }
-
-  // Legacy apiKey path (LEADJIN_USE_VERTEX=false).
-  return new GoogleGenAI({ apiKey: envKey || "" });
+  // No AI-Studio key configured → Vertex is both primary and (no-op) fallback.
+  return wrapWithFallback(getVertexClient());
 }
