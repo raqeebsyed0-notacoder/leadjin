@@ -299,7 +299,9 @@ export async function huntOrchestrate(
 
   console.log(`[HuntOrchestrator] Processing ${crNumbers.length} CR(s) for ${sector} in ${geo}`);
 
-  for (const cr of crNumbers.slice(0, count)) {
+  // Process all CRs in PARALLEL. Sequential was ~N×(enrich + grounded-3.1-pro signal) and
+  // blew the bot's 180s wrapper timeout at count≥3; parallel wall-clock ≈ a single lead.
+  const settled = await Promise.all(crNumbers.slice(0, count).map(async (cr): Promise<AssembledLead | null> => {
     try {
       // ── WATHQ lookup ──────────────────────────────────────────────────────
       let wathqResult: WathqLead;
@@ -314,10 +316,10 @@ export async function huntOrchestrate(
         if (e?.message?.includes('WATHQ_CONSUMER_KEY not set')) {
           wathqPath = 'blocked';
           errors.push(`CR ${cr}: WATHQ_CONSUMER_KEY not set`);
-          continue;
+          return null;
         }
         errors.push(`CR ${cr}: WATHQ lookup failed — ${e?.message ?? String(e)}`);
-        continue;
+        return null;
       }
 
       const company = wathqResult.company;
@@ -395,12 +397,15 @@ export async function huntOrchestrate(
         userId,
       );
       assembled.stored = stored;
-      leads.push(assembled);
+      return assembled;
 
     } catch (e: any) {
       errors.push(`CR ${cr}: unexpected error — ${e?.message ?? String(e)}`);
+      return null;
     }
-  }
+  }));
+
+  for (const a of settled) { if (a) leads.push(a); }
 
   return {
     sector,
