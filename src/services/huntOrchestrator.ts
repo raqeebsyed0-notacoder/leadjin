@@ -301,7 +301,7 @@ export async function huntOrchestrate(
 
   // Process all CRs in PARALLEL. Sequential was ~N×(enrich + grounded-3.1-pro signal) and
   // blew the bot's 180s wrapper timeout at count≥3; parallel wall-clock ≈ a single lead.
-  const settled = await Promise.all(crNumbers.slice(0, count).map(async (cr): Promise<AssembledLead | null> => {
+  const processOne = async (cr: string): Promise<AssembledLead | null> => {
     try {
       // ── WATHQ lookup ──────────────────────────────────────────────────────
       let wathqResult: WathqLead;
@@ -403,9 +403,17 @@ export async function huntOrchestrate(
       errors.push(`CR ${cr}: unexpected error — ${e?.message ?? String(e)}`);
       return null;
     }
-  }));
+  };
 
-  for (const a of settled) { if (a) leads.push(a); }
+  // Concurrency-capped batches. Full parallelism bursts past Vertex's rate limit
+  // (especially while the AI-Studio key is capped → 100% of load lands on Vertex).
+  // Batches of LEADJIN_HUNT_CONCURRENCY (default 2) balance speed vs 429s.
+  const BATCH = Number(process.env.LEADJIN_HUNT_CONCURRENCY || '2') || 2;
+  const targets = crNumbers.slice(0, count);
+  for (let i = 0; i < targets.length; i += BATCH) {
+    const settled = await Promise.all(targets.slice(i, i + BATCH).map(processOne));
+    for (const a of settled) { if (a) leads.push(a); }
+  }
 
   return {
     sector,
