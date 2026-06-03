@@ -305,9 +305,11 @@ export async function huntOrchestrate(
       let wathqResult: WathqLead;
       try {
         wathqResult = await deps.fetchWathqLead(cr);
-        wathqPath = process.env.WATHQ_BASE?.includes('/sandbox/')
-          ? 'live' /* sandbox counts as live for this indicator */
-          : 'live';
+        // Track whether this was a real WATHQ call (key present) or a stubbed call.
+        // If the key is present, the call was real (sandbox or prod depending on WATHQ_BASE).
+        // If the key is absent, the function throws before reaching here — so reaching here
+        // means the key was present (or the call was injected as a stub in tests).
+        wathqPath = process.env.WATHQ_CONSUMER_KEY ? 'live' : 'stubbed';
       } catch (e: any) {
         if (e?.message?.includes('WATHQ_CONSUMER_KEY not set')) {
           wathqPath = 'blocked';
