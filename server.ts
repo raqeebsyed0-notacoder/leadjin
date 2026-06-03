@@ -26,6 +26,7 @@ import { initEnrichmentTables } from './src/services/enrichmentCache.js';
 import { whatsappService } from './src/services/whatsappService.js';
 import { intentSignalService } from './src/services/intentSignals.js';
 import { createCompleteJinRouter } from './src/services/jinCompleteRoutes.js';
+import { createArtisanRouter } from './src/services/artisanRoutes.js';
 import { huntExecutives } from './src/services/linkedinHunter.js';
 import { tripleVerify } from './src/services/sovereignVerifier.js';
 import { craftOutreach, type LeadProfile, type OutreachContext } from './src/services/visionStrategist.js';
@@ -269,7 +270,7 @@ app.get("/api/health", (req, res) => {
 // --- Database Setup (CRM & Email Queue) ---
 let db: Database.Database;
 try {
-  db = new Database(process.env.DB_PATH || "leadjin.db");
+  db = new Database(process.env.DATABASE_PATH || process.env.DB_PATH || "leadjin.db");
   // Enable WAL mode for better concurrent write performance
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
@@ -502,6 +503,32 @@ db.exec(`
     completed_at DATETIME,
     UNIQUE(sequence_id, lead_id)
   );
+
+  CREATE TABLE IF NOT EXISTS outreach_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    message_type TEXT NOT NULL,
+    subject TEXT,
+    body TEXT NOT NULL,
+    language TEXT DEFAULT 'en',
+    status TEXT DEFAULT 'draft',
+    sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS lead_replies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    original_outreach_id INTEGER,
+    reply_body TEXT NOT NULL,
+    category TEXT NOT NULL,
+    confidence REAL DEFAULT 0,
+    suggested_response TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Performance indexes for analytics queries
@@ -520,6 +547,10 @@ try { db.exec("CREATE INDEX IF NOT EXISTS idx_enrollments_next_send ON sequence_
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id)"); } catch(e) {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_lead ON bookings(lead_id)"); } catch(e) {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_start ON bookings(start_time)"); } catch(e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_outreach_lead ON outreach_messages(lead_id, user_id)"); } catch(e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_outreach_sent ON outreach_messages(user_id, sent_at)"); } catch(e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_replies_lead ON lead_replies(lead_id, user_id)"); } catch(e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_replies_created ON lead_replies(user_id, created_at)"); } catch(e) {}
 
 // Legacy migrations removed — all columns consolidated into CREATE TABLE above
 // Foreign key enforcement (for data integrity)
@@ -1121,6 +1152,9 @@ const clearSessionCache = (token: string) => {
 
 // --- Jin AI Employee Routes (All Modules) ---
 app.use('/api/jin', createCompleteJinRouter(db, getUserFromTokenCached));
+
+// --- LeadJin Artisan Routes (Modules 3-5) ---
+app.use('/api/artisan', createArtisanRouter(db, getUserFromTokenCached));
 
 // Shared admin guard helper - requires BOTH admin secret AND valid user session with is_admin flag
 const requireAdmin = (req: express.Request, res: express.Response): boolean => {
@@ -3657,7 +3691,7 @@ app.post("/api/craft-outreach", async (req, res) => {
   }
   
   // Get API key (user-specific or system)
-  const apiKeyRow = db.prepare("SELECT gemini_api_key FROM user_settings WHERE user_id = ?").get(user.id) as any;
+  const apiKeyRow = db.prepare("SELECT gemini_api_key FROM users WHERE id = ?").get(user.id) as any;
   const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
   
   if (!apiKey) {
@@ -3665,11 +3699,11 @@ app.post("/api/craft-outreach", async (req, res) => {
   }
   
   // Get sender info from user profile
-  const senderInfo = db.prepare("SELECT company_name, full_name FROM users WHERE id = ?").get(user.id) as any;
+  const senderInfo = db.prepare("SELECT company_name, email FROM users WHERE id = ?").get(user.id) as any;
   const enrichedContext: OutreachContext = {
     ...context,
     senderCompany: context.senderCompany || senderInfo?.company_name || 'Our Company',
-    senderName: context.senderName || senderInfo?.full_name || outreachUser?.email?.split('@')[0] || 'The Team'
+    senderName: context.senderName || senderInfo?.email?.split('@')[0] || outreachUser?.email?.split('@')[0] || 'The Team'
   };
   
   try {
@@ -5318,7 +5352,7 @@ app.post("/api/lead-score/:id", async (req, res) => {
   
   try {
     // Get API key (user-specific or system)
-    const apiKeyRow = db.prepare("SELECT gemini_api_key FROM user_settings WHERE user_id = ?").get(user.id) as any;
+    const apiKeyRow = db.prepare("SELECT gemini_api_key FROM users WHERE id = ?").get(user.id) as any;
     const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
     
     // Get base score and engagement metrics
@@ -5421,7 +5455,7 @@ app.post("/api/next-action/:id", async (req, res) => {
   
   try {
     // Get API key (user-specific or system)
-    const apiKeyRow = db.prepare("SELECT gemini_api_key FROM user_settings WHERE user_id = ?").get(user.id) as any;
+    const apiKeyRow = db.prepare("SELECT gemini_api_key FROM users WHERE id = ?").get(user.id) as any;
     const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
     
     // Get next action recommendation
@@ -5527,7 +5561,7 @@ app.post("/api/classify-reply", async (req, res) => {
   }
 
   // Get API key (user-specific or system)
-  const apiKeyRow = db.prepare("SELECT gemini_api_key FROM user_settings WHERE user_id = ?").get(user.id) as any;
+  const apiKeyRow = db.prepare("SELECT gemini_api_key FROM users WHERE id = ?").get(user.id) as any;
   const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
@@ -6345,9 +6379,15 @@ async function startServer() {
   const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`LEADJIN Engine running at http://localhost:${PORT}`);
 
-    // ── PERPETUAL CRAWL — Never stops. KSA → Middle East → Asia → World ──
+    // ── PERPETUAL CRAWL — gated by ENABLE_PERPETUAL_CRAWL=true ──
     const crawlApiKey = process.env.GEMINI_API_KEY;
-    if (crawlApiKey) {
+    const crawlEnabled = process.env.ENABLE_PERPETUAL_CRAWL === 'true';
+
+    if (!crawlEnabled) {
+      console.log('[PreCrawler] disabled (set ENABLE_PERPETUAL_CRAWL=true to enable)');
+    } else if (!crawlApiKey) {
+      console.log('[PreCrawler] Skipped — no GEMINI_API_KEY');
+    } else {
       const totalCities = CRAWL_PHASES.reduce((s, p) => s + p.cities.length, 0);
       console.log(`[PreCrawler] PERPETUAL CRAWL starting in 10s — ${CRAWL_PHASES.length} phases, ${totalCities} cities, ${INDUSTRIES.length} industries`);
 
@@ -6359,11 +6399,13 @@ async function startServer() {
 
       // ── JIN AI EMPLOYEE INITIALIZATION ──
       console.log('[Jin] AI Employee initialized and ready');
-      
-      // ── CONTINUOUS VERIFICATION — runs every 3 minutes alongside crawl ──
-      const scheduleVerification = () => {
-        const intervalMs = 3 * 60 * 1000; // Every 3 minutes
+    }
 
+    // ── CONTINUOUS VERIFICATION — cadence controlled by VERIFICATION_INTERVAL_MS (default 6h) ──
+    if (crawlApiKey) {
+      const verificationIntervalMs = parseInt(process.env.VERIFICATION_INTERVAL_MS || '', 10) || (6 * 60 * 60 * 1000); // Default: 6 hours
+
+      const scheduleVerification = () => {
         setTimeout(async () => {
           try {
             console.log('[Verify] === VERIFICATION CYCLE STARTED ===');
@@ -6373,22 +6415,11 @@ async function startServer() {
             console.error('[Verify] Verification failed:', err.message);
           }
           scheduleVerification();
-        }, intervalMs);
+        }, verificationIntervalMs);
       };
 
-      // Run first verification immediately (15s after crawl starts)
-      setTimeout(async () => {
-        try {
-          console.log('[Verify] === INITIAL VERIFICATION STARTED ===');
-          await runDailyVerification(db, 50);
-          console.log('[Verify] === INITIAL VERIFICATION COMPLETE ===');
-        } catch (err: any) {
-          console.error('[Verify] Initial verification failed:', err.message);
-        }
-        scheduleVerification();
-      }, 15000);
-    } else {
-      console.log('[PreCrawler] Skipped — no GEMINI_API_KEY');
+      // Run first verification after one interval (not immediately)
+      scheduleVerification();
     }
   });
   server.on('error', (err: any) => {
