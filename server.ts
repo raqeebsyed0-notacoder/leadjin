@@ -29,6 +29,7 @@ import { intentSignalService } from './src/services/intentSignals.js';
 import { createCompleteJinRouter } from './src/services/jinCompleteRoutes.js';
 import { createArtisanRouter } from './src/services/artisanRoutes.js';
 import { huntExecutives } from './src/services/linkedinHunter.js';
+import { fetchWathqLead } from './src/services/wathqService.js';
 import { tripleVerify } from './src/services/sovereignVerifier.js';
 import { craftOutreach, type LeadProfile, type OutreachContext } from './src/services/visionStrategist.js';
 import { ProtocolManager, type ClassifyOptions } from './src/services/protocolManager.js';
@@ -2941,6 +2942,60 @@ app.post("/api/hunt", async (req, res) => {
       error: "Strategic entity discovery failed",
       message: error.message,
       domain,
+    });
+  }
+});
+
+// --- WATHQ Saudi Commercial Registry ---
+// GET /api/wathq/:cr   — look up a Saudi CR number against the official registry.
+// POST /api/hunt-wathq — same lookup via POST body {cr, lang?}.
+// Both routes are open (no auth) — mirrors /api/hunt pattern.
+// D11: national IDs are never returned.
+app.get("/api/wathq/:cr", async (req, res) => {
+  const { cr } = req.params;
+  const lang = (req.query.lang === 'ar' || req.query.lang === 'en') ? req.query.lang : 'en';
+
+  if (!cr || !/^\d{10}$/.test(cr)) {
+    return res.status(400).json({ error: "cr must be a 10-digit Saudi CR number" });
+  }
+
+  console.log(`[API/WATHQ] Registry lookup requested for CR: ${cr}`);
+
+  try {
+    const lead = await fetchWathqLead(cr, lang);
+    res.json(lead);
+  } catch (error: any) {
+    console.error(`[API/WATHQ] Lookup failed for CR ${cr}:`, error.message);
+    res.status(error.status || 500).json({
+      error: "WATHQ registry lookup failed",
+      message: error.message,
+      cr,
+    });
+  }
+});
+
+app.post("/api/hunt-wathq", async (req, res) => {
+  const { cr, lang } = req.body;
+  const resolvedLang = (lang === 'ar' || lang === 'en') ? lang : 'en';
+
+  if (!cr || typeof cr !== 'string') {
+    return res.status(400).json({ error: "cr is required (10-digit Saudi CR number)" });
+  }
+  if (!/^\d{10}$/.test(cr)) {
+    return res.status(400).json({ error: "cr must be a 10-digit Saudi CR number" });
+  }
+
+  console.log(`[API/hunt-wathq] Registry lookup requested for CR: ${cr}`);
+
+  try {
+    const lead = await fetchWathqLead(cr, resolvedLang);
+    res.json(lead);
+  } catch (error: any) {
+    console.error(`[API/hunt-wathq] Lookup failed for CR ${cr}:`, error.message);
+    res.status(error.status || 500).json({
+      error: "WATHQ registry lookup failed",
+      message: error.message,
+      cr,
     });
   }
 });
