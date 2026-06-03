@@ -27,6 +27,21 @@ export interface ExecutiveProfile {
   location?: string;
   confidence: number;
   source: 'linkedin_stealth' | 'linkedin_dork' | 'public_recon';
+  /**
+   * How the email address was obtained.
+   * 'pattern-guess' = inferred via first.last@domain — treat as untrusted until verified.
+   * 'scraped'       = found on a real source page (future).
+   * 'api'           = returned by a paid enrichment API (future).
+   */
+  emailSource?: 'pattern-guess' | 'scraped' | 'api';
+  /**
+   * Highest verification rung the email has passed.
+   * 'unverified' = no checks done yet.
+   * 'mx_ok'      = domain has MX records but mailbox not confirmed.
+   * 'probable'   = SMTP RCPT returned 250 on a non-catch-all domain.
+   * 'verified'   = cross-referenced on a real source page.
+   */
+  emailVerification?: 'unverified' | 'mx_ok' | 'probable' | 'verified';
 }
 
 export interface HuntResult {
@@ -417,11 +432,26 @@ export async function huntExecutives(
     }
   }
 
-  // Enrich with inferred emails
-  const enrichedExecutives = executives.map(exec => ({
-    ...exec,
-    email: inferEmail(exec.name, companyDomain),
-  }));
+  // Enrich with inferred emails.
+  // IMPORTANT: inferEmail() guesses the address via name-pattern — it is NOT verified.
+  // Tag every guessed email with explicit provenance so downstream code can never
+  // mistake it for a confirmed address.  A real, found/scraped email would carry
+  // emailSource:'scraped' or 'api' and a higher confidence.
+  const enrichedExecutives = executives.map(exec => {
+    const guessedEmail = inferEmail(exec.name, companyDomain);
+    if (guessedEmail) {
+      return {
+        ...exec,
+        email: guessedEmail,
+        emailSource: 'pattern-guess' as const,
+        emailVerification: 'unverified' as const,
+        // Cap confidence for any executive whose email is only a guess
+        confidence: Math.min(exec.confidence, 40),
+      };
+    }
+    // No email could be inferred — leave the exec as-is without email fields
+    return exec;
+  });
 
   const durationMs = Date.now() - startTime;
   const companyName = companyDomain.replace(/\.com\.sa$|\.com$/, '').replace(/\./g, ' ');

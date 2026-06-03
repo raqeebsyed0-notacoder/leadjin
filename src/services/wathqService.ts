@@ -57,6 +57,32 @@ export function isRealBase(base: string): boolean {
 }
 
 /**
+ * For ACTIVE registrations, WATHQ /fullinfo expects the unified National Number (7xxxxxxxxx),
+ * NOT the normal CR number (1010.../4030...). A normal CR number is auto-converted via
+ * /crNationalNumber/{cr}. Inputs already starting with '7' are treated as National Numbers.
+ * On any conversion failure the original input is returned (sandbox tolerates CR numbers).
+ */
+export async function resolveNationalNumber(
+  idInput: string,
+  key: string,
+  base: string,
+): Promise<string> {
+  const id = String(idInput).trim();
+  if (id.startsWith('7')) return id; // already a National Number
+  try {
+    const res = await fetch(`${base}/crNationalNumber/${encodeURIComponent(id)}`, {
+      headers: { apiKey: key, Accept: 'application/json' },
+    });
+    if (!res.ok) return id;
+    const j = (await res.json()) as Record<string, unknown>;
+    const nn = j['crNationalNumber'];
+    return nn != null ? String(nn) : id;
+  } catch {
+    return id;
+  }
+}
+
+/**
  * Extract decision-makers from a raw WATHQ node (partners or management).
  * Shape-tolerant: the node may be an array, or a dict with .managers/.members/.relations.
  * National IDs (identity.id) are intentionally DROPPED — D11.
@@ -138,7 +164,9 @@ export async function fetchWathqLead(
     process.env.WATHQ_BASE ??
     'https://api.wathq.sa/sandbox/commercial-registration';
 
-  const url = `${base}/fullinfo/${encodeURIComponent(cr)}?language=${lang}`;
+  // Active CRs must be queried by National Number; auto-convert a normal CR number.
+  const id = await resolveNationalNumber(cr, key, base);
+  const url = `${base}/fullinfo/${encodeURIComponent(id)}?language=${lang}`;
 
   let data: Record<string, unknown>;
   try {

@@ -365,6 +365,152 @@ export async function verifyEmail(email: string): Promise<EmailVerificationResul
 }
 
 // ---------------------------------------------------------------------------
+// Verification Ladder  (new — 2026-06-02)
+// ---------------------------------------------------------------------------
+//
+// Returns the HIGHEST rung actually passed, as a labelled EmailVerdict.
+//
+// Rung order (ascending):
+//   invalid_syntax → unverified → mx_ok → probable → verified
+//
+// Key safety rule:
+//   If isGuessed=true (email was produced by pattern-inference, not a real source),
+//   the result is CLAMPED to at most 'mx_ok'.  This makes it structurally
+//   impossible for a guessed address to masquerade as verified or probable.
+//
+// doLiveSmtp (default false):
+//   Set to true ONLY in controlled enrichment flows, never in tests.
+//   When false, SMTP RCPT is skipped and the rung stays at mx_ok.
+
+export type EmailVerdictStatus =
+  | 'invalid_syntax'
+  | 'unverified'
+  | 'mx_ok'
+  | 'probable'
+  | 'verified';
+
+export interface EmailVerdict {
+  email: string;
+  status: EmailVerdictStatus;
+  evidence: string;
+}
+
+const VERDICT_RUNG_ORDER: EmailVerdictStatus[] = [
+  'invalid_syntax',
+  'unverified',
+  'mx_ok',
+  'probable',
+  'verified',
+];
+
+/** Returns the lower-ranked of two verdict statuses. */
+function clampStatus(
+  status: EmailVerdictStatus,
+  ceiling: EmailVerdictStatus,
+): EmailVerdictStatus {
+  const statusIdx = VERDICT_RUNG_ORDER.indexOf(status);
+  const ceilingIdx = VERDICT_RUNG_ORDER.indexOf(ceiling);
+  return statusIdx <= ceilingIdx ? status : ceiling;
+}
+
+/**
+ * verifyEmailLadder — full verification ladder with provenance safety.
+ *
+ * @param email       - The address to verify.
+ * @param isGuessed   - True when the address was produced by pattern-inference
+ *                      (e.g. inferEmail).  Clamps result to at most 'mx_ok'.
+ * @param doLiveSmtp  - When true, attempts an SMTP RCPT probe for 'probable'.
+ *                      Defaults to false (DNS-only, safe for tests and bulk runs).
+ */
+export async function verifyEmailLadder(
+  email: string,
+  isGuessed = false,
+  doLiveSmtp = false,
+): Promise<EmailVerdict> {
+  const normalized = email.trim().toLowerCase();
+  const GUESSED_CEILING: EmailVerdictStatus = 'mx_ok';
+
+  // ── Rung 1: Syntax ────────────────────────────────────────────────────────
+  if (!syntaxCheck(normalized)) {
+    return {
+      email: normalized,
+      status: 'invalid_syntax',
+      evidence: 'Failed email-address regex check',
+    };
+  }
+
+  const domain = normalized.split('@')[1];
+  if (!domain || domain.length < 4 || !domain.includes('.') || domain.endsWith('.')) {
+    return {
+      email: normalized,
+      status: 'invalid_syntax',
+      evidence: 'Domain part is malformed or too short',
+    };
+  }
+
+  // ── Rung 2 baseline: syntax passes but nothing else confirmed yet ─────────
+  let currentStatus: EmailVerdictStatus = 'unverified';
+  let currentEvidence = 'Syntax OK; no further checks passed yet';
+
+  // ── Rung 3: MX lookup (DNS only — always allowed) ─────────────────────────
+  let mxRecords: { exchange: string; priority: number }[] = [];
+  try {
+    mxRecords = await dns.resolveMx(domain);
+  } catch {
+    // DNS failure — stay at 'unverified'
+    currentEvidence = 'Syntax OK; DNS MX lookup failed';
+  }
+
+  if (mxRecords.length > 0) {
+    currentStatus = 'mx_ok';
+    currentEvidence = `MX records found for ${domain} (${mxRecords[0].exchange})`;
+  }
+
+  // ── Rung 4: probable via SMTP RCPT (live; opt-in only) ───────────────────
+  // NEVER runs when isGuessed=true (guessed ceiling is mx_ok, so we skip).
+  if (
+    doLiveSmtp &&
+    !isGuessed &&
+    currentStatus === 'mx_ok'
+  ) {
+    const isCatchAll = await detectCatchAll(domain);
+    if (!isCatchAll) {
+      const smtpAccepted = await smtpProbe(normalized);
+      if (smtpAccepted) {
+        currentStatus = 'probable';
+        currentEvidence = `SMTP RCPT TO:${normalized} returned 250 on non-catch-all domain`;
+      }
+    } else {
+      // Catch-all accepts everything — stay at mx_ok, not probable
+      currentEvidence += '; domain is catch-all, SMTP result unreliable';
+    }
+  }
+
+  // ── Rung 5: verified — requires cross-reference on a real source page ─────
+  // allow-stub: scraping/cross-reference implementation is intentionally deferred per spec
+  // (task brief: "leave a clear stub + comment; do not implement scraping now")
+  // When implemented: find the email on an authoritative source (LinkedIn, company site,
+  // Apollo/Hunter API), then call setVerifiedRung(email) to promote to 'verified'.
+  // A guessed email MUST NEVER reach this rung — the clamp below enforces that.
+
+  // ── Safety clamp for guessed emails ──────────────────────────────────────
+  const finalStatus = isGuessed
+    ? clampStatus(currentStatus, GUESSED_CEILING)
+    : currentStatus;
+
+  const finalEvidence =
+    isGuessed && currentStatus !== finalStatus
+      ? `${currentEvidence} [clamped from '${currentStatus}' to '${finalStatus}' because email is pattern-guessed]`
+      : currentEvidence;
+
+  return {
+    email: normalized,
+    status: finalStatus,
+    evidence: finalEvidence,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Permutation-based email finding
 // ---------------------------------------------------------------------------
 
