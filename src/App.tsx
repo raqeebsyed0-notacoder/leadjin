@@ -429,7 +429,7 @@ const translations = {
     analyticsTitle: "Engine Intelligence",
     analyticsSub: "Real-time Performance Metrics",
     totalLeads: "Total Leads",
-    revenue: "Revenue (USD)",
+    revenue: "Revenue (SAR)",
     pending: "Pending",
     funnel: "Conversion Funnel",
     outreachVol: "Email Outreach Volume",
@@ -551,7 +551,7 @@ const translations = {
     analyticsTitle: "ذكاء المحرك",
     analyticsSub: "مقاييس الأداء في الوقت الفعلي",
     totalLeads: "إجمالي العملاء",
-    revenue: "الإيرادات (دولار)",
+    revenue: "الإيرادات (ر.س)",
     pending: "قيد الانتظار",
     funnel: "قمع التحويل",
     outreachVol: "حجم التواصل عبر البريد",
@@ -3517,9 +3517,9 @@ function AppContent() {
                               <div className="flex items-center justify-between">
                                 <div className="space-y-1">
                                   <p className="text-sm font-medium">{currentUser.email}</p>
-                                  <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${currentUser.subscription_plan === 'pro' ? 'bg-app-accent/10 text-app-accent border border-app-accent/20' : 'bg-white/5 text-white/40 border border-white/10'}`}>
-                                    <span className={`w-1.5 h-1.5 rounded-full ${currentUser.subscription_plan === 'pro' ? 'bg-app-accent' : 'bg-white/30'}`} />
-                                    {currentUser.subscription_plan === 'pro' ? 'Pro' : currentUser.subscription_plan === 'basic' ? 'Basic' : 'Free'}
+                                  <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${currentUser.subscription_plan === 'pro' || currentUser.subscription_plan === 'trial' ? 'bg-app-accent/10 text-app-accent border border-app-accent/20' : 'bg-white/5 text-white/40 border border-white/10'}`}>
+                                    <span className={`w-1.5 h-1.5 rounded-full ${currentUser.subscription_plan === 'pro' || currentUser.subscription_plan === 'trial' ? 'bg-app-accent' : 'bg-white/30'}`} />
+                                    {currentUser.subscription_plan === 'pro' ? 'Pro' : currentUser.subscription_plan === 'trial' ? 'Pro Trial' : currentUser.subscription_plan === 'basic' ? 'Basic' : 'Free'}
                                   </div>
                                 </div>
                                 <button onClick={handleLogout} className="text-[10px] font-bold uppercase tracking-widest text-red-400 hover:text-red-300 transition-colors">
