@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LEADJIN</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 360px;
+      min-height: 480px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0a0a;
+      color: #fff;
+    }
+    .header {
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(49,130,206,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo { font-size: 13px; font-weight: 900; letter-spacing: 0.2em; color: #3182ce; }
+    .badge {
+      font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em;
+      padding: 2px 8px; border-radius: 9999px; background: rgba(49,130,206,0.15); color: #3182ce;
+    }
+    .open-btn {
+      display: block; width: calc(100% - 32px); margin: 16px auto 0;
+      padding: 10px; background: #3182ce; color: #fff;
+      border: none; border-radius: 8px; font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.15em; cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .open-btn:hover { opacity: 0.85; }
+    .section-title {
+      font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.25em;
+      color: rgba(255,255,255,0.4); padding: 12px 20px 8px;
+    }
+    .lead-list { padding: 0 12px 12px; }
+    .lead-item {
+      padding: 10px 12px; border-radius: 10px;
+      background: rgba(49,130,206,0.06); border: 1px solid rgba(49,130,206,0.12);
+      margin-bottom: 6px; cursor: pointer; transition: background 0.15s;
+    }
+    .lead-item:hover { background: rgba(49,130,206,0.12); }
+    .lead-name { font-size: 12px; font-weight: 600; }
+    .lead-meta { font-size: 10px; color: rgba(255,255,255,0.45); margin-top: 2px; }
+    .score-badge {
+      float: right; font-size: 10px; font-weight: 700;
+      color: #3182ce; background: rgba(49,130,206,0.1);
+      padding: 2px 7px; border-radius: 6px; margin-top: 1px;
+    }
+    .empty {
+      text-align: center; padding: 32px 20px;
+      font-size: 11px; color: rgba(255,255,255,0.25);
+      line-height: 1.6;
+    }
+    .status-bar {
+      padding: 8px 20px; font-size: 9px; color: rgba(255,255,255,0.3);
+      border-top: 1px solid rgba(255,255,255,0.06);
+      position: fixed; bottom: 0; width: 100%; background: #0a0a0a;
+    }
+    .status-dot {
+      display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+      background: #10b981; margin-right: 5px; vertical-align: middle;
+    }
+    .status-dot.offline { background: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="logo">LEADJIN</span>
+    <span class="badge" id="tier-badge">Basic</span>
+  </div>
+  <button class="open-btn" id="open-app">Open Full Dashboard →</button>
+  <div class="section-title">Recent Leads</div>
+  <div class="lead-list" id="lead-list">
+    <div class="empty">Loading leads...</div>
+  </div>
+  <div class="status-bar">
+    <span class="status-dot" id="status-dot"></span>
+    <span id="status-text">Connecting...</span>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

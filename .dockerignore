@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+*.db
+*.log
+.git
+app
+extension
+scripts
+server.ts.full

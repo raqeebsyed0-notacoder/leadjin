@@ -1,0 +1,285 @@
+import React, { useState, useEffect, useCallback } from 'react';
+
+interface DashboardData {
+  users: {
+    total: number;
+    byPlan: { free: number; basic: number; pro: number };
+    recent: any[];
+    activeSessions: number;
+  };
+  leads: {
+    total: number;
+    byStatus: { status: string; c: number }[];
+    perUser: { email: string; lead_count: number; subscription_plan: string }[];
+  };
+  email: { total: number; pending: number; scheduled: number; sent: number; failed: number };
+  revenue: { paid: number; pipeline: number };
+  recentActivity: { type: string; description: string; created_at: string }[];
+  env: { gemini: boolean; googleOAuth: boolean; smtp: boolean; adminSecret: boolean; appUrl: string };
+  timestamp: string;
+}
+
+const Pill = ({ ok, label }: { ok: boolean; label: string }) => (
+  <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold ${ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+    <span className={`w-1.5 h-1.5 rounded-full ${ok ? 'bg-emerald-400' : 'bg-red-400'}`} />
+    {label}
+  </span>
+);
+
+const Stat = ({ label, value, sub }: { label: string; value: string | number; sub?: string }) => (
+  <div className="p-5 rounded-2xl bg-white/5 border border-white/10 space-y-1">
+    <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">{label}</p>
+    <p className="text-2xl font-light tabular-nums">{value}</p>
+    {sub && <p className="text-[11px] opacity-40">{sub}</p>}
+  </div>
+);
+
+export default function AdminDashboard() {
+  const [secret, setSecret] = useState(() => sessionStorage.getItem('ljadmin') || '');
+  const [input, setInput] = useState('');
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [error, setError] = useState('');
+  const [lastRefresh, setLastRefresh] = useState('');
+
+  const fetch_ = useCallback(async (s: string) => {
+    const r = await fetch('/api/admin/dashboard', { method: 'POST', headers: { 'x-admin-secret': s, 'Content-Type': 'application/json' } });
+    if (!r.ok) throw new Error('Forbidden');
+    return r.json() as Promise<DashboardData>;
+  }, []);
+
+  const load = useCallback(async (s: string) => {
+    try {
+      const d = await fetch_(s);
+      setData(d);
+      setSecret(s);
+      sessionStorage.setItem('ljadmin', s);
+      setLastRefresh(new Date().toLocaleTimeString());
+      setError('');
+    } catch {
+      setError('Invalid admin secret.');
+      sessionStorage.removeItem('ljadmin');
+    }
+  }, [fetch_]);
+
+  useEffect(() => {
+    if (secret) load(secret);
+  }, [secret, load]);
+
+  useEffect(() => {
+    if (!secret) return;
+    const id = setInterval(() => load(secret), 30000);
+    return () => clearInterval(id);
+  }, [secret, load]);
+
+  if (!secret || error) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0a] text-white flex items-center justify-center">
+        <div className="w-full max-w-sm space-y-6 p-8 rounded-3xl bg-white/5 border border-white/10">
+          <div>
+            <h1 className="text-xl font-light">LEADJIN <span className="text-blue-400">Admin</span></h1>
+            <p className="text-xs opacity-40 mt-1">Developer Dashboard</p>
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <input
+            type="password"
+            placeholder="Admin secret"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && load(input)}
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-blue-400/50"
+          />
+          <button
+            onClick={() => load(input)}
+            className="w-full bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl py-3 text-sm transition-colors"
+          >
+            Access Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0a] text-white flex items-center justify-center">
+        <p className="text-xs opacity-40 animate-pulse">Loading...</p>
+      </div>
+    );
+  }
+
+  const deliveryRate = data.email.total > 0 ? Math.round((data.email.sent / data.email.total) * 100) : 0;
+
+  return (
+    <div className="min-h-screen bg-[#0a0a0a] text-white font-sans">
+      {/* Header */}
+      <div className="border-b border-white/10 px-8 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <h1 className="text-sm font-bold tracking-wider">LEADJIN <span className="text-blue-400">ADMIN</span></h1>
+          <span className="text-[10px] opacity-30 font-mono">{data.env.appUrl}</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="text-[10px] opacity-30">Refreshed {lastRefresh} · auto 30s</span>
+          <button onClick={() => load(secret)} className="text-[10px] opacity-40 hover:opacity-80 border border-white/10 px-3 py-1.5 rounded-lg transition-opacity">
+            Refresh now
+          </button>
+          <button onClick={() => { sessionStorage.removeItem('ljadmin'); setSecret(''); setData(null); }}
+            className="text-[10px] opacity-40 hover:opacity-80 border border-white/10 px-3 py-1.5 rounded-lg transition-opacity">
+            Logout
+          </button>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-8 py-10 space-y-10">
+
+        {/* Environment Config */}
+        <section className="space-y-3">
+          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Environment Config</p>
+          <div className="flex flex-wrap gap-2">
+            <Pill ok={data.env.gemini} label="GEMINI_API_KEY" />
+            <Pill ok={data.env.googleOAuth} label="GOOGLE_OAUTH" />
+            <Pill ok={data.env.smtp} label="SMTP" />
+            <Pill ok={data.env.adminSecret} label="ADMIN_SECRET" />
+          </div>
+        </section>
+
+        {/* Top Stats */}
+        <section className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+          <Stat label="Total Users" value={data.users.total} sub={`${data.users.activeSessions} active sessions`} />
+          <Stat label="Free" value={data.users.byPlan.free} />
+          <Stat label="Basic" value={data.users.byPlan.basic} />
+          <Stat label="Pro" value={data.users.byPlan.pro} />
+          <Stat label="Total Leads" value={data.leads.total} />
+          <Stat label="Revenue (Paid)" value={`$${data.revenue.paid.toLocaleString()}`} sub={`$${data.revenue.pipeline.toLocaleString()} pipeline`} />
+        </section>
+
+        {/* Email Health */}
+        <section className="space-y-3">
+          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Email Queue Health</p>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <Stat label="Total Queued" value={data.email.total} />
+            <Stat label="Pending (now)" value={data.email.pending} />
+            <Stat label="Scheduled" value={data.email.scheduled} sub="Day 3 / Day 7" />
+            <Stat label="Sent" value={data.email.sent} />
+            <Stat label="Failed" value={data.email.failed} sub={`${deliveryRate}% delivery rate`} />
+          </div>
+          {/* Delivery bar */}
+          <div className="h-2 rounded-full bg-white/5 overflow-hidden">
+            <div className="h-full bg-emerald-500 transition-all" style={{ width: `${deliveryRate}%` }} />
+          </div>
+        </section>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+          {/* Lead Pipeline */}
+          <section className="space-y-3">
+            <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Lead Pipeline (All Users)</p>
+            <div className="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-white/10">
+                    <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">Status</th>
+                    <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">Count</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {data.leads.byStatus.map((s: any) => (
+                    <tr key={s.status}>
+                      <td className="p-4 font-mono text-xs">{s.status}</td>
+                      <td className="p-4 text-right font-mono text-xs">{s.c}</td>
+                    </tr>
+                  ))}
+                  {data.leads.byStatus.length === 0 && (
+                    <tr><td colSpan={2} className="p-4 text-center opacity-30 text-xs">No leads yet</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* Leads Per User */}
+          <section className="space-y-3">
+            <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Top Users by Leads</p>
+            <div className="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-white/10">
+                    <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">User</th>
+                    <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">Plan</th>
+                    <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">Leads</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {data.leads.perUser.map((u: any, i: number) => (
+                    <tr key={i}>
+                      <td className="p-4 font-mono text-xs truncate max-w-[180px]">{u.email}</td>
+                      <td className="p-4">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${u.subscription_plan === 'pro' ? 'bg-blue-500/20 text-blue-400' : u.subscription_plan === 'basic' ? 'bg-purple-500/20 text-purple-400' : 'bg-white/10 text-white/50'}`}>
+                          {u.subscription_plan}
+                        </span>
+                      </td>
+                      <td className="p-4 text-right font-mono text-xs">{u.lead_count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        {/* Recent Users */}
+        <section className="space-y-3">
+          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Recent Registrations</p>
+          <div className="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/10">
+                  <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">Email</th>
+                  <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">Plan</th>
+                  <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">Searches</th>
+                  <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">Joined</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {data.users.recent.map((u: any) => (
+                  <tr key={u.id}>
+                    <td className="p-4 font-mono text-xs">{u.email}</td>
+                    <td className="p-4">
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${u.subscription_plan === 'pro' ? 'bg-blue-500/20 text-blue-400' : u.subscription_plan === 'basic' ? 'bg-purple-500/20 text-purple-400' : 'bg-white/10 text-white/50'}`}>
+                        {u.subscription_plan}
+                      </span>
+                    </td>
+                    <td className="p-4 text-right font-mono text-xs">{u.monthly_searches_used} / {u.monthly_searches_limit === -1 ? '∞' : u.monthly_searches_limit}</td>
+                    <td className="p-4 text-right font-mono text-xs opacity-50">{new Date(u.created_at).toLocaleDateString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* Recent Activity */}
+        <section className="space-y-3">
+          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Recent Activity Log</p>
+          <div className="rounded-2xl bg-white/5 border border-white/10 divide-y divide-white/5">
+            {data.recentActivity.length === 0 && (
+              <p className="p-4 text-xs opacity-30 text-center">No activity yet</p>
+            )}
+            {data.recentActivity.map((a: any, i: number) => (
+              <div key={i} className="flex items-start gap-4 p-4">
+                <span className={`mt-0.5 text-[10px] px-2 py-0.5 rounded-full font-mono font-bold shrink-0 ${a.type === 'EMAIL_SENT' ? 'bg-emerald-500/10 text-emerald-400' : a.type === 'STATUS_CHANGE' ? 'bg-blue-500/10 text-blue-400' : 'bg-white/10 text-white/50'}`}>
+                  {a.type}
+                </span>
+                <p className="text-xs opacity-60 flex-1">{a.description}</p>
+                <p className="text-[10px] opacity-30 font-mono shrink-0">{new Date(a.created_at).toLocaleString()}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="pt-4 text-center">
+          <p className="text-[10px] opacity-20 font-mono">LEADJIN Admin · {data.timestamp}</p>
+        </div>
+      </div>
+    </div>
+  );
+}

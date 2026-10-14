@@ -1,0 +1,172 @@
+/**
+ * RTL layout overrides for LeadJin
+ * Applied when html[dir="rtl"] is set (Arabic mode).
+ * Uses CSS logical properties where possible so the same rule works for both directions.
+ */
+
+/* ─── Typography ─────────────────────────────────────────────────────────── */
+[dir="rtl"] body,
+[dir="rtl"] {
+  font-family: 'Noto Kufi Arabic', 'Noto Sans Arabic', Tahoma, 'Segoe UI', system-ui, sans-serif;
+  text-align: right;
+}
+
+/* Numbers & Latin strings inside Arabic text should stay LTR */
+[dir="rtl"] .font-mono,
+[dir="rtl"] input[type="number"],
+[dir="rtl"] input[type="email"],
+[dir="rtl"] input[type="url"] {
+  direction: ltr;
+  text-align: left;
+}
+
+/* ─── Sidebar / Nav ───────────────────────────────────────────────────────── */
+/* The sidebar has a left border separator — flip it */
+[dir="rtl"] aside {
+  border-inline-start: none;
+  border-inline-end: 1px solid var(--app-border, rgba(255,255,255,0.1));
+}
+
+/* Nav items: icon + label should be right-aligned */
+[dir="rtl"] nav button span,
+[dir="rtl"] nav a span {
+  text-align: right;
+}
+
+/* ─── Flex row reversal ───────────────────────────────────────────────────── */
+/* Utility: add .rtl-row to any flex row that needs to flip */
+[dir="rtl"] .rtl-row {
+  flex-direction: row-reverse;
+}
+
+/* Header items row */
+[dir="rtl"] header > div {
+  flex-direction: row-reverse;
+}
+
+/* ─── Margins / Padding (logical) ────────────────────────────────────────── */
+/* ml-6 / mr-6 equivalents already handled by Tailwind rtl: variants in JSX.
+   This section handles cases not covered by Tailwind RTL variants. */
+
+[dir="rtl"] .ml-auto { margin-inline-start: auto; margin-inline-end: 0; }
+[dir="rtl"] .mr-auto { margin-inline-end: auto; margin-inline-start: 0; }
+
+/* Lead card drag handle moves to the right in RTL */
+[dir="rtl"] .group .absolute.left-2 {
+  left: auto;
+  right: 0.5rem;
+}
+
+/* ─── Borders ─────────────────────────────────────────────────────────────── */
+/* Left accent borders on cards should flip to right in RTL.
+   Already handled via Tailwind rtl:border-l-0 rtl:border-r-2 in JSX —
+   this is a safety fallback for any card that was missed. */
+[dir="rtl"] .border-l-2:not([class*="rtl:border-l-0"]) {
+  border-inline-start: none;
+  border-inline-end-width: 2px;
+  border-inline-end-style: solid;
+}
+
+/* ─── Icons that encode direction ─────────────────────────────────────────── */
+/* Arrow icons, send icons — already have rtl:rotate-180 in JSX.
+   ChevronRight used in breadcrumbs should flip. */
+[dir="rtl"] .lucide-chevron-right,
+[dir="rtl"] .lucide-arrow-right,
+[dir="rtl"] .lucide-arrow-left {
+  transform: scaleX(-1);
+}
+
+/* ─── Form inputs ─────────────────────────────────────────────────────────── */
+[dir="rtl"] input,
+[dir="rtl"] textarea,
+[dir="rtl"] select {
+  text-align: right;
+  direction: rtl;
+}
+
+/* Placeholder alignment */
+[dir="rtl"] input::placeholder,
+[dir="rtl"] textarea::placeholder {
+  text-align: right;
+}
+
+/* ─── Scrollbar ───────────────────────────────────────────────────────────── */
+/* Move custom scrollbar to left side in RTL */
+[dir="rtl"] .custom-scrollbar::-webkit-scrollbar {
+  /* scrollbar renders on the left automatically in RTL — no override needed */
+}
+
+/* ─── Charts ──────────────────────────────────────────────────────────────── */
+/* Recharts axis labels: handled via JS orientation prop in App.tsx.
+   This ensures the SVG text doesn't get mirrored. */
+[dir="rtl"] .recharts-wrapper text {
+  direction: ltr; /* keep numeric axis labels LTR */
+}
+
+/* ─── Pipeline Kanban ─────────────────────────────────────────────────────── */
+/* Horizontal scroll container should start from right */
+[dir="rtl"] .pipeline-board {
+  direction: rtl;
+}
+
+/* Columns inside board should stay ltr for individual column content */
+[dir="rtl"] .pipeline-board > * {
+  direction: ltr;
+}
+
+/* Override: column headers should be RTL */
+[dir="rtl"] .pipeline-board .space-y-1 h3,
+[dir="rtl"] .pipeline-board .space-y-1 p {
+  direction: rtl;
+  text-align: right;
+}
+
+/* ─── Modal / Overlay ─────────────────────────────────────────────────────── */
+[dir="rtl"] .glass.rounded-\[32px\] {
+  text-align: right;
+}
+
+/* ─── Notification toast ─────────────────────────────────────────────────── */
+[dir="rtl"] .fixed.bottom-8 {
+  direction: rtl;
+}
+
+/* ─── Trial banner ────────────────────────────────────────────────────────── */
+[dir="rtl"] .fixed.top-0.text-center {
+  direction: rtl;
+}
+
+/* ─── Status badges ───────────────────────────────────────────────────────── */
+[dir="rtl"] .uppercase.tracking-widest {
+  letter-spacing: 0.05em; /* Arabic letters don't need wide tracking */
+}
+
+/* ─── Lead detail panel (right drawer) ────────────────────────────────────── */
+/* In LTR the panel slides in from the right.
+   In RTL it should slide in from the left — handled in JS.
+   The border should flip: */
+[dir="rtl"] .fixed.inset-y-0.right-0 {
+  right: auto;
+  left: 0;
+  border-right: none;
+  border-left: 1px solid var(--app-border, rgba(255,255,255,0.1));
+}
+
+/* ─── Tabs ────────────────────────────────────────────────────────────────── */
+[dir="rtl"] [role="tablist"],
+[dir="rtl"] .flex.gap-1.overflow-x-auto {
+  direction: rtl;
+}
+
+/* ─── Logo ─────────────────────────────────────────────────────────────────── */
+/* LEADJIN logo stays LTR regardless of document dir */
+[dir="rtl"] .leadjin-logo {
+  direction: ltr;
+  display: inline-block;
+}
+
+/* ─── Language toggle button ─────────────────────────────────────────────── */
+.lang-toggle-btn {
+  min-width: 3rem;
+  font-feature-settings: "tnum";
+}
