@@ -49,3 +49,6 @@ mobile/android/app/build/
 mobile/android/build/
 mobile/android/local.properties
 mobile/android/.idea/
+
+# Test auth cache (contains a throwaway test session token)
+app/tests/.auth-cache.json
