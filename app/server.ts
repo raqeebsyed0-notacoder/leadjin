@@ -2805,7 +2805,7 @@ app.get("/api/enrichment/providers", async (req, res) => {
 });
 
 // --- Enrichment: Provider usage stats ---
-app.get("/api/enrichment/stats", async (req, res) => {
+app.get("/api/enrichment/provider-stats", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
 
@@ -5241,7 +5241,7 @@ app.get("/api/signals", (req, res) => {
     "SELECT * FROM intent_signals WHERE user_id = ? AND dismissed = 0 ORDER BY detected_at DESC LIMIT 100"
   ).all(user.id);
 
-  res.json({ signals });
+  res.json(signals);
 });
 
 // GET /api/signals/lead/:lead_id — signals for a specific lead
@@ -5251,15 +5251,13 @@ app.get("/api/signals/lead/:lead_id", (req, res) => {
 
   const { lead_id } = req.params;
 
-  // Verify lead belongs to user
-  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(lead_id, user.id) as any;
-  if (!lead) return res.status(404).json({ error: "Lead not found" });
-
+  // Scope to the authenticated user's own signals. A lead that has no signals
+  // (or does not belong to the caller) returns an empty list, not a 404.
   const signals = db.prepare(
-    "SELECT * FROM intent_signals WHERE lead_id = ? ORDER BY detected_at DESC"
-  ).all(lead_id);
+    "SELECT * FROM intent_signals WHERE lead_id = ? AND user_id = ? ORDER BY detected_at DESC"
+  ).all(lead_id, user.id);
 
-  res.json({ signals });
+  res.json(signals);
 });
 
 // POST /api/signals/:id/dismiss — dismiss a signal

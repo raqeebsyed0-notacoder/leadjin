@@ -3,6 +3,8 @@ import request from 'supertest';
 import { getSharedToken } from './shared-auth';
 
 const API_URL = 'http://localhost:3001';
+// AI-backed endpoints fail closed with 503 when no Gemini key is configured.
+const HAS_AI_KEY = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
 
 describe('Artisan Module 3 — Vision Strategist', () => {
   let token: string;
@@ -63,7 +65,7 @@ describe('Artisan Module 3 — Vision Strategist', () => {
   });
 
   // Test 3.5: Generate personalized outreach
-  it('3.5 - should generate personalized outreach', async () => {
+  it.skipIf(!HAS_AI_KEY)('3.5 - should generate personalized outreach', async () => {
     const res = await request(API_URL)
       .post('/api/artisan/outreach/generate')
       .set('Authorization', `Bearer ${token}`)
