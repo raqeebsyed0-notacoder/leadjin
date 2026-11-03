@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Backups / scratch
+*.bak
+*.bak-*
+*.pre-fix-*
+*.pre-move-*
+*.orig
+*~
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Capacitor / Gradle
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/android/build/
+mobile/android/local.properties
+mobile/android/.idea/

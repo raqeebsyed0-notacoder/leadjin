@@ -1,0 +1,54 @@
+services:
+  leadjin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: leadjin-app
+    restart: unless-stopped
+
+    # External port 3002 → internal port 3001
+    ports:
+      - "3002:3001"
+
+    environment:
+      # === Core runtime ===
+      NODE_ENV: production
+      PORT: "3001"
+      # Bind on all interfaces so port-forwarding works
+      HOST: "0.0.0.0"
+      APP_URL: "http://127.0.0.1:3002"
+
+      # === Database — points to the volume-mounted path ===
+      DATABASE_PATH: /app/data/leadjin.db
+
+      # === API credentials (injected from host env / .env file) ===
+      GEMINI_API_KEY:     ${GEMINI_API_KEY}
+      HUNTER_API_KEY:     ${HUNTER_API_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+
+      # === LeadJin identity ===
+      ADMIN_USER_ID:           ${ADMIN_USER_ID:-7264571310}
+      RAQEEB_TELEGRAM_CHAT_ID: ${RAQEEB_TELEGRAM_CHAT_ID:-7264571310}
+
+      # Puppeteer — use system Chromium
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
+
+    volumes:
+      # Persist the SQLite database across container rebuilds
+      - ./data:/app/data
+
+    # Allow the container to reach host services (e.g. local SMTP, other pm2 processes)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Pass remaining env vars from the .env file (SMTP, Google OAuth, etc.)
+    env_file:
+      - .env
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 45s
+      retries: 3

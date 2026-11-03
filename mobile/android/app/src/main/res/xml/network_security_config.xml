@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+  <!-- Allow cleartext HTTP to local network (required for LAN connection to PC) -->
+  <domain-config cleartextTrafficPermitted="true">
+    <!-- Common private network ranges -->
+    <domain includeSubdomains="true">192.168.0.0</domain>
+    <domain includeSubdomains="true">192.168.1.0</domain>
+    <domain includeSubdomains="true">10.0.0.0</domain>
+    <domain includeSubdomains="true">172.22.48.1</domain>
+    <domain includeSubdomains="true">172.16.0.0</domain>
+    <domain includeSubdomains="true">172.22.240.1</domain>
+    <domain includeSubdomains="true">172.31.80.1</domain>
+    <domain includeSubdomains="true">localhost</domain>
+    <domain includeSubdomains="true">127.0.0.1</domain>
+    <domain includeSubdomains="true">192.168.8.177</domain>
+    <domain includeSubdomains="true">192.168.1.18</domain>
+  </domain-config>
+  <base-config cleartextTrafficPermitted="true">
+    <trust-anchors>
+      <certificates src="system" />
+    </trust-anchors>
+  </base-config>
+</network-security-config>
