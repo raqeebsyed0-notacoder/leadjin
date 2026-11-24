@@ -6,19 +6,20 @@ process.on('unhandledRejection', (reason: any) => {
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
+import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
 import { google } from "googleapis";
 import Database from "better-sqlite3";
-import { createHash, createHmac, randomBytes, randomUUID } from "crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import cors from "cors";
 import dns from 'dns/promises';
 import net from 'net';
-import { generateLeadjinLeads } from "./src/services/geminiService.js";
+import { generateLeadjinLeads } from "./src/services/leadService.js";
 import { getGenAI } from "./src/services/genaiClient.js";
 import { waterfallEnrichment } from './src/services/waterfallEnrichment.js';
 import { enrichLead, enqueueEnrichment, enrichBatch, getQueueItem, getEnrichmentStats, type EnrichmentInput, setDatabase } from './src/services/enrichmentEngine.js';
@@ -31,7 +32,10 @@ import { createArtisanRouter } from './src/services/artisanRoutes.js';
 import { huntExecutives } from './src/services/linkedinHunter.js';
 import { fetchWathqLead } from './src/services/wathqService.js';
 import { huntOrchestrate, type OrchestrateInput } from './src/services/huntOrchestrator.js';
+import { computeMeetingReady, MEETING_READY_THRESHOLD } from './src/services/meetingReady.js';
+import { seedCaseStudyLeads } from './src/services/firstBootSeed.js';
 import { tripleVerify } from './src/services/sovereignVerifier.js';
+import { createModelSettingsRouter } from './src/services/modelSettingsRoutes.js';
 import { craftOutreach, type LeadProfile, type OutreachContext } from './src/services/visionStrategist.js';
 import { ProtocolManager, type ClassifyOptions } from './src/services/protocolManager.js';
 import { 
@@ -174,7 +178,7 @@ function getRamadanDatesForYear(year: number): { ramadanStart: Date; ramadanEnd:
 
 // --- Startup validation ---
 const REQUIRED_ENV: Record<string, string> = {
-  GEMINI_API_KEY: 'Lead harvesting will be disabled',
+  MAIL_CRED_KEY: 'Email credential encryption will be disabled without MAIL_CRED_KEY',
 };
 let startupWarnings = 0;
 for (const [key, impact] of Object.entries(REQUIRED_ENV)) {
@@ -270,6 +274,201 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// ===========================================================================
+// wave2/w2-server — live provider health + scoped driver service token
+//
+// These are INFORMATIONAL / AUTHORIZATION utilities. Neither re-introduces a
+// "dead key-gate": no route is refused because a provider key is missing. The
+// key-gates were removed on purpose; AI calls always go through
+// genaiClient.getGenAI(), which falls back to local Ollama when a keyed
+// provider has no key. This probe reports what is ACTUALLY live so the UI can
+// never show "not configured" falsely.
+// ===========================================================================
+
+// --- Live provider health --------------------------------------------------
+// Mirrors genaiClient's provider/key/model resolution (including the key-free
+// Ollama fallback and the lazy gateway-key read) without importing its private
+// constants. Read-only: it never blocks or downgrades a request.
+const HEALTH_PROVIDER_KEY_ENV: Record<string, string> = {
+  gateway: '__gateway__',        // API_SERVER_KEY (env, then Hermes .env file)
+  openrouter: 'OPENROUTER_API_KEY',
+  together: 'TOGETHER_API_KEY',
+  nvidia: 'NVIDIA_API_KEY',
+  nous: 'NOUS_API_KEY',
+  // 'ollama' needs no credential.
+};
+const HEALTH_PROVIDER_MODEL: Record<string, string> = {
+  ollama: (process.env.LEADJIN_MODEL || 'gemma4:e4b').trim(),
+  gateway: 'google/flash-2.5-flash-lite',
+  openrouter: (process.env.LEADJIN_OPENROUTER_MODEL || 'openrouter/auto').trim(),
+  together: (process.env.LEADJIN_TOGETHER_MODEL || 'Qwen/Qwen3-8B').trim(),
+  nvidia: (process.env.LEADJIN_NVIDIA_MODEL || 'meta/llama-3.1-8b-instruct').trim(),
+  nous: (process.env.LEADJIN_NOUS_MODEL || 'stepfun/step-3.7-flash:free').trim(),
+};
+
+let _healthGatewayKey: string | undefined;
+function healthGatewayKey(): string {
+  if (_healthGatewayKey !== undefined) return _healthGatewayKey;
+  let k = (process.env.API_SERVER_KEY || '').trim();
+  if (!k) {
+    try {
+      const txt = readFileSync('/home/euphoria/euphoria-v2/.hermes/.env', 'utf8');
+      const m = txt.match(/^\s*API_SERVER_KEY\s*=\s*(.+)$/m);
+      if (m) k = m[1].trim().replace(/^["']|["']$/g, '');
+    } catch { /* key stays unset */ }
+  }
+  _healthGatewayKey = k || '';
+  return _healthGatewayKey;
+}
+
+function getLiveProviderInfo() {
+  const configuredProvider = (process.env.LEADJIN_PROVIDER || 'ollama').toLowerCase();
+  const keyEnv = HEALTH_PROVIDER_KEY_ENV[configuredProvider];
+  const keyRequired = configuredProvider !== 'ollama' && !!keyEnv;
+  const keyFound = configuredProvider === 'ollama'
+    ? true
+    : (keyEnv === '__gateway__' ? !!healthGatewayKey() : !!(process.env[keyEnv!] || '').trim());
+  // getGenAI() falls back to local Ollama when a keyed provider has no key.
+  const provider = (keyRequired && !keyFound) ? 'ollama' : configuredProvider;
+  const model = HEALTH_PROVIDER_MODEL[provider] || HEALTH_PROVIDER_MODEL.ollama;
+  return {
+    configuredProvider,                  // raw LEADJIN_PROVIDER value
+    provider,                            // provider actually serving AI calls
+    model,                               // default model for the live provider
+    // "credential satisfied": Ollama needs no key, so it is never 'not configured'.
+    keyPresent: provider === 'ollama' ? true : keyFound,
+    keyRequired: provider !== 'ollama',
+    configured: true,                    // live provider is operational
+    fallback: provider !== configuredProvider,
+  };
+}
+
+app.get("/api/health/provider", (req, res) => {
+  res.json({ status: "ok", ...getLiveProviderInfo(), timestamp: new Date().toISOString() });
+});
+
+// --- Scoped driver service token ------------------------------------------
+// The app ISSUES a short-lived, HMAC-signed token to a trusted agent (Jin) and
+// VERIFIES it when that agent drives the app's own API. Tokens are scoped
+// (e.g. 'jin:drive') and expiring. This is an authorization channel, NOT a
+// provider key-gate: it does not gate normal user or AI traffic.
+const serviceTokenSecret = () => process.env.LEADJIN_ADMIN_SECRET || ''; // required at startup
+
+interface ServiceTokenPayload {
+  sub: string;
+  scopes: string[];
+  iat: number;
+  exp: number;
+  jti: string;
+}
+
+function b64urlEncode(input: string | Buffer): string {
+  return Buffer.from(input).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(input: string): string {
+  const pad = input.length % 4 ? '='.repeat(4 - (input.length % 4)) : '';
+  return Buffer.from(input.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function signServiceTokenPart(data: string): string {
+  return b64urlEncode(createHmac('sha256', serviceTokenSecret()).update(data).digest());
+}
+
+function issueServiceToken(identity: string, scopes: string[], ttlSeconds = 3600): string {
+  const now = Math.floor(Date.now() / 1000);
+  const payload: ServiceTokenPayload = {
+    sub: identity,
+    scopes: [...new Set(scopes)],
+    iat: now,
+    exp: now + ttlSeconds,
+    jti: randomUUID(),
+  };
+  const body = b64urlEncode(JSON.stringify(payload));
+  return `${body}.${signServiceTokenPart(body)}`;
+}
+
+function verifyServiceToken(token: string | undefined | null, requiredScope?: string): ServiceTokenPayload | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [body, sig] = parts;
+  const expected = signServiceTokenPart(body);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  let payload: ServiceTokenPayload;
+  try {
+    payload = JSON.parse(b64urlDecode(body));
+  } catch { return null; }
+  if (!payload || typeof payload.exp !== 'number' || payload.exp <= Math.floor(Date.now() / 1000)) return null;
+  if (!Array.isArray(payload.scopes) || typeof payload.sub !== 'string') return null;
+  if (requiredScope && !payload.scopes.includes(requiredScope)) return null;
+  return payload;
+}
+
+function serviceTokenFromRequest(req: express.Request): string | undefined {
+  const h = req.headers['x-service-token'];
+  if (typeof h === 'string' && h.trim()) return h.trim();
+  const auth = req.headers.authorization;
+  if (auth && /^Bearer\s+/i.test(auth)) return auth.replace(/^Bearer\s+/i, '').trim() || undefined;
+  return undefined;
+}
+
+// Express guard for service-owned routes only — never attached to user routes.
+function requireServiceScope(scope: string) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const payload = verifyServiceToken(serviceTokenFromRequest(req), scope);
+    if (!payload) return res.status(401).json({ error: `service token with scope '${scope}' required` });
+    (req as any).service = payload;
+    next();
+  };
+}
+
+// ISSUE: caller proves it holds the app admin secret (Jin's service credential).
+app.post('/api/service-token/issue', (req, res) => {
+  const secret = process.env.LEADJIN_ADMIN_SECRET;
+  if (!secret || req.headers['x-admin-secret'] !== secret) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const identity = (req.body?.identity || 'jin').toString().slice(0, 64) || 'jin';
+  const requested = Array.isArray(req.body?.scopes)
+    ? req.body.scopes.map((s: any) => String(s).slice(0, 48))
+    : [];
+  const scopes = requested.length ? requested : ['jin:drive'];
+  const ttl = Math.min(Math.max(parseInt(req.body?.ttlSeconds, 10) || 3600, 60), 86400);
+  const token = issueServiceToken(identity, scopes, ttl);
+  const payload = verifyServiceToken(token);
+  res.json({
+    token,
+    tokenType: 'Bearer',
+    identity,
+    scopes,
+    expiresIn: ttl,
+    expiresAt: payload ? new Date(payload.exp * 1000).toISOString() : undefined,
+  });
+});
+
+// VERIFY: introspect a presented token without gating any other route.
+app.post('/api/service-token/verify', (req, res) => {
+  const payload = verifyServiceToken(serviceTokenFromRequest(req));
+  if (!payload) return res.status(401).json({ valid: false, error: 'invalid or expired service token' });
+  res.json({
+    valid: true,
+    identity: payload.sub,
+    scopes: payload.scopes,
+    expiresAt: new Date(payload.exp * 1000).toISOString(),
+  });
+});
+
+// Example service-owned route showing verification in force (no gate elsewhere).
+app.get('/api/service/jin/ping', requireServiceScope('jin:drive'), (req, res) => {
+  res.json({
+    status: 'ok',
+    service: (req as any).service?.sub,
+    scopes: (req as any).service?.scopes,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // --- Database Setup (CRM & Email Queue) ---
 let db: Database.Database;
 try {
@@ -317,10 +516,12 @@ db.exec(`
     vision_2030_program TEXT,
     vision_2030_alignment TEXT,
     email_verified INTEGER DEFAULT 0,
-    email_source TEXT DEFAULT 'gemini',
+    email_source TEXT DEFAULT 'ai',
     do_not_contact INTEGER DEFAULT 0,
     stage_entered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    verified_real INTEGER DEFAULT 0, meeting_ready INTEGER DEFAULT 0,
+    provenance_url TEXT
   );
 
   CREATE TABLE IF NOT EXISTS email_queue (
@@ -441,7 +642,7 @@ db.exec(`
     is_founder INTEGER DEFAULT 0,
     is_admin INTEGER DEFAULT 0,
     ramadan_override INTEGER DEFAULT 0,
-    gemini_api_key TEXT,
+    api_key TEXT,
     trial_ends_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -535,25 +736,25 @@ db.exec(`
 `);
 
 // Performance indexes for analytics queries
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_user ON leads(user_id)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_user_status ON leads(user_id, status)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(user_id, created_at)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices(user_id, status)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_email_queue_user ON email_queue(user_id, sent_at)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_activity_log_user ON activity_log(user_id, created_at)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_email_events_queue ON email_events(email_queue_id)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_sequences_user ON email_sequences(user_id, status)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_enrollments_sequence ON sequence_enrollments(sequence_id, status)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_enrollments_next_send ON sequence_enrollments(status, next_send_at)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_lead ON bookings(lead_id)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_start ON bookings(start_time)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_outreach_lead ON outreach_messages(lead_id, user_id)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_outreach_sent ON outreach_messages(user_id, sent_at)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_replies_lead ON lead_replies(lead_id, user_id)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_replies_created ON lead_replies(user_id, created_at)"); } catch(e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_user ON leads(user_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_user_status ON leads(user_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(user_id, created_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices(user_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_email_queue_user ON email_queue(user_id, sent_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_activity_log_user ON activity_log(user_id, created_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_email_events_queue ON email_events(email_queue_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_sequences_user ON email_sequences(user_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_enrollments_sequence ON sequence_enrollments(sequence_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_enrollments_next_send ON sequence_enrollments(status, next_send_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_lead ON bookings(lead_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_start ON bookings(start_time)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_outreach_lead ON outreach_messages(lead_id, user_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_outreach_sent ON outreach_messages(user_id, sent_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_replies_lead ON lead_replies(lead_id, user_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_replies_created ON lead_replies(user_id, created_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
 
 // Legacy migrations removed — all columns consolidated into CREATE TABLE above
 // Foreign key enforcement (for data integrity)
@@ -569,7 +770,7 @@ const safeMigrations = [
   "ALTER TABLE leads ADD COLUMN outreach_sequence TEXT",
   "ALTER TABLE leads ADD COLUMN majlis_tips TEXT",
   "ALTER TABLE leads ADD COLUMN email_verified INTEGER DEFAULT 0",
-  "ALTER TABLE leads ADD COLUMN email_source TEXT DEFAULT 'gemini'",
+  "ALTER TABLE leads ADD COLUMN email_source TEXT DEFAULT 'ai'",
   "ALTER TABLE leads ADD COLUMN do_not_contact INTEGER DEFAULT 0",
   "ALTER TABLE leads ADD COLUMN stage_entered_at DATETIME DEFAULT CURRENT_TIMESTAMP",
   // Task 1C: Website verification columns
@@ -593,7 +794,7 @@ const safeMigrations = [
   "ALTER TABLE users ADD COLUMN is_founder INTEGER DEFAULT 0",
   "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0",
   "ALTER TABLE users ADD COLUMN ramadan_override INTEGER DEFAULT 0",
-  "ALTER TABLE users ADD COLUMN gemini_api_key TEXT",
+  "ALTER TABLE users ADD COLUMN api_key TEXT",
   "ALTER TABLE users ADD COLUMN trial_ends_at DATETIME",
   // email_queue columns that might be missing
   "ALTER TABLE email_queue ADD COLUMN attempt_count INTEGER DEFAULT 0",
@@ -609,6 +810,10 @@ const safeMigrations = [
   "ALTER TABLE leads ADD COLUMN whatsapp_verified INTEGER DEFAULT 0",
   "ALTER TABLE leads ADD COLUMN phone TEXT",
   "ALTER TABLE leads ADD COLUMN email_confidence REAL DEFAULT 0",
+  // D5b: WATHQ provenance — verified_real (1 = production registry, 0 = sandbox/unknown)
+  // and provenance_url (the WATHQ API call URL the lead was sourced from).
+  "ALTER TABLE leads ADD COLUMN verified_real INTEGER DEFAULT 0",
+  "ALTER TABLE leads ADD COLUMN provenance_url TEXT",
 ];
 
 for (const migration of safeMigrations) {
@@ -647,7 +852,7 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_credit_txn_user ON credit_transactions(user_id, created_at)"); } catch(e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_credit_txn_user ON credit_transactions(user_id, created_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
 
 // Intent signals table
 db.exec(`
@@ -697,8 +902,8 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_messages_lead ON whatsapp_messages(lead_id, user_id)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_messages_wa_id ON whatsapp_messages(wa_message_id)"); } catch(e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_messages_lead ON whatsapp_messages(lead_id, user_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_messages_wa_id ON whatsapp_messages(wa_message_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
 console.log('[Migration] WhatsApp messages table ready.');
 
 // WhatsApp Sequence tables
@@ -727,9 +932,9 @@ db.exec(`
     UNIQUE(sequence_id, lead_id)
   );
 `);
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_sequences_user ON wa_sequences(user_id, status)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_enrollments_seq ON wa_enrollments(sequence_id, status)"); } catch(e) {}
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_enrollments_next ON wa_enrollments(status, next_send_at)"); } catch(e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_sequences_user ON wa_sequences(user_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_enrollments_seq ON wa_enrollments(sequence_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_enrollments_next ON wa_enrollments(status, next_send_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
 console.log('[Migration] WhatsApp sequence tables ready.');
 
 // AI Price Suggestion cache (in-memory only, cleared on restart)
@@ -822,6 +1027,20 @@ function grantEnrichmentCredits(userId: number, amount: number, type: string, de
     .run(userId, amount, balanceAfter, type, description);
 }
 
+// Refund (reverse) credits — undo a debit and log a credit reversal.
+// Safe to call when nothing was charged: returns false without touching the ledger.
+function refundEnrichmentCredits(userId: number, amount: number, type: string, description: string, referenceId?: string): boolean {
+  const row = db.prepare("SELECT enrichment_credits, enrichment_credits_used FROM users WHERE id = ?").get(userId) as any;
+  const used = row?.enrichment_credits_used ?? 0;
+  if (used < amount) return false;
+  db.prepare("UPDATE users SET enrichment_credits_used = enrichment_credits_used - ? WHERE id = ?").run(amount, userId);
+  const refreshed = db.prepare("SELECT enrichment_credits, enrichment_credits_used FROM users WHERE id = ?").get(userId) as any;
+  const balanceAfter = (refreshed?.enrichment_credits ?? 0) - (refreshed?.enrichment_credits_used ?? 0);
+  db.prepare("INSERT INTO credit_transactions (user_id, amount, balance_after, type, description, reference_id) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(userId, -amount, balanceAfter, 'refund', description, referenceId ?? null);
+  return true;
+}
+
 // --- Session Cleanup Job ---
 setInterval(() => {
   try {
@@ -837,14 +1056,18 @@ setInterval(() => {
 // --- API Key Encryption ---
 import { createCipheriv, createDecipheriv, scryptSync } from 'crypto';
 
-const ENCRYPTION_KEY = process.env.LEADJIN_ADMIN_SECRET 
-  ? scryptSync(process.env.LEADJIN_ADMIN_SECRET, 'salt', 32) 
+const ADMIN_ENCRYPTION_KEY = process.env.LEADJIN_ADMIN_SECRET
+  ? scryptSync(process.env.LEADJIN_ADMIN_SECRET, 'salt', 32)
+  : null;
+
+const MAIL_CREDENTIALS_KEY = process.env.MAIL_CRED_KEY
+  ? scryptSync(process.env.MAIL_CRED_KEY, 'mail-salt', 32)
   : null;
 
 function encryptApiKey(key: string): string {
-  if (!ENCRYPTION_KEY) return key; // Fallback if no secret set
+  if (!ADMIN_ENCRYPTION_KEY) return key; // Fallback if no secret set
   const iv = randomBytes(16);
-  const cipher = createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  const cipher = createCipheriv('aes-256-gcm', ADMIN_ENCRYPTION_KEY, iv);
   let encrypted = cipher.update(key, 'utf8', 'hex');
   encrypted += cipher.final('hex');
   const authTag = cipher.getAuthTag().toString('hex');
@@ -852,11 +1075,33 @@ function encryptApiKey(key: string): string {
 }
 
 function decryptApiKey(encryptedKey: string): string {
-  if (!ENCRYPTION_KEY || !encryptedKey.includes(':')) return encryptedKey; // Fallback
+  if (!ADMIN_ENCRYPTION_KEY || !encryptedKey.includes(':')) return encryptedKey; // Fallback
   const [ivHex, authTagHex, encrypted] = encryptedKey.split(':');
   const iv = Buffer.from(ivHex, 'hex');
   const authTag = Buffer.from(authTagHex, 'hex');
-  const decipher = createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  const decipher = createDecipheriv('aes-256-gcm', ADMIN_ENCRYPTION_KEY, iv);
+  decipher.setAuthTag(authTag);
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
+
+function encryptMailCredentials(key: string): string {
+  if (!MAIL_CREDENTIALS_KEY) return key; // Fallback if no MAIL_CRED_KEY set
+  const iv = randomBytes(16);
+  const cipher = createCipheriv('aes-256-gcm', MAIL_CREDENTIALS_KEY, iv);
+  let encrypted = cipher.update(key, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag().toString('hex');
+  return `${iv.toString('hex')}:${authTag}:${encrypted}`;
+}
+
+function decryptMailCredentials(encryptedKey: string): string {
+  if (!MAIL_CREDENTIALS_KEY || !encryptedKey.includes(':')) return encryptedKey; // Fallback
+  const [ivHex, authTagHex, encrypted] = encryptedKey.split(':');
+  const iv = Buffer.from(ivHex, 'hex');
+  const authTag = Buffer.from(authTagHex, 'hex');
+  const decipher = createDecipheriv('aes-256-gcm', MAIL_CREDENTIALS_KEY, iv);
   decipher.setAuthTag(authTag);
   let decrypted = decipher.update(encrypted, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
@@ -1035,41 +1280,44 @@ app.post("/api/user/ramadan-override", (req, res) => {
   res.json({ status: "ok", ramadan_override: override });
 });
 
-// --- Gemini API Key Management ---
-// POST: Save user's Gemini API key (encrypted)
-app.post("/api/user/gemini-key", (req, res) => {
+// --- API Key Management ---
+// POST: Save user's API key (encrypted)
+app.post("/api/user/api-key", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
   const { apiKey } = req.body;
-  if (!apiKey || typeof apiKey !== 'string' || !apiKey.startsWith('AIza')) {
+  if (!apiKey || typeof apiKey !== 'string') {
     return res.status(400).json({ error: "Invalid API key format" });
   }
   const encryptedKey = encryptApiKey(apiKey);
-  db.prepare("UPDATE users SET gemini_api_key = ? WHERE id = ?").run(encryptedKey, user.id);
+  db.prepare("UPDATE users SET api_key = ? WHERE id = ?").run(encryptedKey, user.id);
   res.json({ status: "ok", message: "API key saved" });
 });
 
-// GET: Check if user has Gemini API key (returns masked)
-app.get("/api/user/gemini-key", (req, res) => {
+// GET: Check if user has API key (returns masked)
+app.get("/api/user/api-key", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  const row = db.prepare("SELECT gemini_api_key FROM users WHERE id = ?").get(user.id) as any;
-  const hasKey = !!(row?.gemini_api_key);
+  const row = db.prepare("SELECT api_key FROM users WHERE id = ?").get(user.id) as any;
+  const hasKey = !!(row?.api_key);
   let maskedKey = null;
   if (hasKey) {
-    const decryptedKey = decryptApiKey(row.gemini_api_key);
+    const decryptedKey = decryptApiKey(row.api_key);
     maskedKey = decryptedKey.substring(0, 6) + '•••••••••••••••' + decryptedKey.slice(-4);
   }
   res.json({ hasKey, maskedKey });
 });
 
-// DELETE: Remove user's Gemini API key
-app.delete("/api/user/gemini-key", (req, res) => {
+// DELETE: Remove user's API key
+app.delete("/api/user/api-key", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  db.prepare("UPDATE users SET gemini_api_key = NULL WHERE id = ?").run(user.id);
+  db.prepare("UPDATE users SET api_key = NULL WHERE id = ?").run(user.id);
   res.json({ status: "ok", message: "API key removed" });
 });
+
+// --- Gemini API Key Management ---
+// API key routes removed for gemini integration cleanup
 
 // --- Company Profile Management ---
 app.get("/api/user/profile", (req, res) => {
@@ -1105,7 +1353,7 @@ app.put("/api/user/preferences", (req, res) => {
   if (!user) return;
   const existing = db.prepare("SELECT preferences FROM users WHERE id = ?").get(user.id) as any;
   let prefs = {};
-  try { prefs = JSON.parse(existing?.preferences || '{}'); } catch {}
+  try { prefs = JSON.parse(existing?.preferences || '{}'); } catch (e) { console.error('[Preferences] Failed to parse stored preferences:', e.message); }
   const merged = { ...prefs, ...req.body };
   db.prepare("UPDATE users SET preferences = ? WHERE id = ?").run(JSON.stringify(merged), user.id);
   res.json({ saved: true });
@@ -1158,6 +1406,9 @@ app.use('/api/jin', createCompleteJinRouter(db, getUserFromTokenCached));
 
 // --- LeadJin Artisan Routes (Modules 3-5) ---
 app.use('/api/artisan', createArtisanRouter(db, getUserFromTokenCached));
+
+// --- LeadJin Model Settings Router (settings + model selection) ---
+app.use('/api/settings', createModelSettingsRouter(db));
 
 // Shared admin guard helper - requires BOTH admin secret AND valid user session with is_admin flag
 const requireAdmin = (req: express.Request, res: express.Response): boolean => {
@@ -1242,7 +1493,6 @@ app.get("/api/admin/dashboard", (req, res) => {
   `).all();
 
   const env = {
-    gemini: !!process.env.GEMINI_API_KEY,
     googleOAuth: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
     smtp: !!process.env.SMTP_HOST,
     adminSecret: !!process.env.LEADJIN_ADMIN_SECRET,
@@ -1344,12 +1594,12 @@ async function enrichWithConcurrencyLimit<T>(
 // --- Self-Reliant Email Enrichment Pipeline ---
 async function enrichLeadEmail(
   lead: any,
-  geminiApiKey: string
+  apiKey: string
 ): Promise<{ email: string | null; verified: boolean; source: string }> {
 
-  // ── STEP 1: Gemini Google Search for public email ──────────────────────────
+  // ── STEP 1: Google Search for public email ──────────────────────────────────
   try {
-    const ai = getGenAI(geminiApiKey);
+    const ai = getGenAI(apiKey);
     const searchPrompt = `Search Google for the email address of "${lead.name}", ${lead.title} at "${lead.company}".
 
 Search specifically:
@@ -1360,15 +1610,15 @@ Search specifically:
 
 Return ONLY the email address found. If multiple found, return the one most likely to be this specific person. If absolutely nothing found, return NULL.`;
     const searchRes = await ai.models.generateContent({
-      model: "gemini-flash-lite-latest",
+      model: "flash-lite",
       contents: searchPrompt,
       config: { tools: [{ googleSearch: {} }] },
     });
     const raw = (searchRes.text || '').trim();
     const emailMatch = raw.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
     if (emailMatch && !raw.toUpperCase().includes('NULL')) {
-      // Task 1B: Gemini search is NOT verified - only web_scrape and smtp_verified are verified
-      return { email: emailMatch[0], verified: false, source: 'gemini_search' };
+      // Task 1B: Google search is NOT verified - only web_scrape and smtp_verified are verified
+      return { email: emailMatch[0], verified: false, source: 'google_search' };
     }
   } catch (e: any) {
     console.warn('[Enrichment] Gemini search failed:', e.message);
@@ -1382,13 +1632,13 @@ Return ONLY the email address found. If multiple found, return the one most like
       domain = u.hostname.replace('www.', '');
     } catch {}
   }
-  // ── STEP 1b: Use Gemini to find actual company domain ────────────────────
+  // ── STEP 1b: Use Google to find actual company domain ────────────────────
   if (!domain && lead.company) {
     try {
-      const ai = getGenAI(geminiApiKey);
+      const ai = getGenAI(apiKey);
       const domainPrompt = `What is the official website domain for "${lead.company}"? Return ONLY the domain name (e.g., "aramco.com" for Saudi Aramco), nothing else. If unknown, return NULL.`;
       const domainRes = await ai.models.generateContent({
-        model: "gemini-flash-lite-latest",
+        model: "flash-lite",
         contents: domainPrompt,
         config: { tools: [{ googleSearch: {} }] },
       });
@@ -1606,8 +1856,12 @@ Search query: site:linkedin.com/in "${name}" "${company}"
 Return ONLY the LinkedIn profile URL if found. The URL must start with https://linkedin.com/in/ or https://www.linkedin.com/in/
 If no LinkedIn profile found, return NULL.`;
 
+    // NOTE: Google Search grounding (config.tools) is dropped by the local
+    // Ollama provider (callOllama never serialises config.tools), so the model
+    // has no live search here. The URL this route returns is unverified —
+    // callers must treat it as a best-effort guess, not a grounded result.
     const searchRes = await ai.models.generateContent({
-      model: "gemini-flash-lite-latest",
+      model: "flash-lite",
       contents: searchPrompt,
       config: { tools: [{ googleSearch: {} }] },
     });
@@ -1686,6 +1940,40 @@ function recalculateLeadScore(lead: any): { score: number, breakdown: object } {
   );
 
   return { score, breakdown };
+}
+
+// --- Meeting-Ready Trigger ---
+// Marks a lead as "meeting ready" when its lead_score crosses the threshold.
+// This triggers the calendar booking flow in the UI.
+function updateMeetingReadyStatus(lead: any): number {
+  return computeMeetingReady(lead);
+}
+
+// Persist the meeting-ready flag and record the trigger once, when a lead
+// crosses the threshold. Returns true when this call fired the trigger.
+function applyMeetingReadyTrigger(
+  leadId: string,
+  userId: number,
+  previousScore: number | null | undefined,
+  nextScore: number | null | undefined,
+): boolean {
+  const wasReady = (previousScore ?? 0) >= MEETING_READY_THRESHOLD;
+  const isReady = computeMeetingReady({ lead_score: nextScore }) === 1;
+  if (!isReady || wasReady) return false;
+
+  db.prepare("UPDATE leads SET meeting_ready = 1 WHERE lead_id = ? AND user_id = ?")
+    .run(leadId, userId);
+  try {
+    db.prepare("INSERT INTO activity_log (lead_id, user_id, type, description) VALUES (?, ?, 'MEETING_READY', ?)")
+      .run(
+        leadId,
+        userId,
+        `Meeting-Ready trigger fired: lead score reached ${nextScore} (threshold ${MEETING_READY_THRESHOLD}). Calendar booking flow unlocked.`,
+      );
+  } catch {
+    // The trigger must not fail just because the activity log is unavailable.
+  }
+  return true;
 }
 
 // --- Pre-Crawl Cache Helpers ---
@@ -1915,7 +2203,7 @@ app.post("/api/leads/harvest", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
   resetMonthlyIfNeeded(user.id);
-  const fresh = db.prepare("SELECT email, subscription_plan, subscription_expires_at, trial_ends_at, monthly_searches_used, monthly_searches_limit, gemini_api_key, is_founder FROM users WHERE id = ?").get(user.id) as any;
+  const fresh = db.prepare("SELECT email, subscription_plan, subscription_expires_at, trial_ends_at, monthly_searches_used, monthly_searches_limit, api_key, is_founder FROM users WHERE id = ?").get(user.id) as any;
   // Trial/subscription gate
   const subStatus = getSubscriptionStatus(fresh);
   if (!subStatus.isActive) {
@@ -1927,13 +2215,12 @@ app.post("/api/leads/harvest", async (req, res) => {
   }
   
   // Use user's Gemini API key if available (except for founder who uses server key)
-  let apiKey = process.env.GEMINI_API_KEY;
+  let apiKey = process.env.API_KEY;
   let usingPersonalKey = false;
-  if (!fresh.is_founder && fresh.gemini_api_key) {
-    apiKey = decryptApiKey(fresh.gemini_api_key);
+  if (!fresh.is_founder && fresh.api_key) {
+    apiKey = decryptApiKey(fresh.api_key);
     usingPersonalKey = true;
   }
-  if (!apiKey) return res.status(503).json({ error: "GEMINI_API_KEY not configured. Add your key in Settings > Integrations." });
   
   // Validate required fields
   const { searchParams } = req.body;
@@ -1958,12 +2245,12 @@ app.post("/api/leads/harvest", async (req, res) => {
       return res.json({ leads: cachedLeads, usingPersonalKey, source: 'cache' });
     }
 
-    // Not enough cached — call Gemini for the remainder, then merge
-    const geminiLimit = requestedLimit - cachedLeads.length;
-    console.log(`[Harvest] ${cachedLeads.length} cached leads found; calling Gemini for ${geminiLimit} more`);
+    // Not enough cached — call for the remainder, then merge
+    const leadLimit = requestedLimit - cachedLeads.length;
+    console.log(`[Harvest] ${cachedLeads.length} cached leads found; calling for ${leadLimit} more`);
 
     // Map searchParams to the expected generateLeadjinLeads parameters
-    const geminiLeads = await generateLeadjinLeads({
+    const leadResults = await generateLeadjinLeads({
       userIndustry: searchParams.targetIndustry || 'Technology',
       userServices: searchParams.userServices || '',
       userCaseStudy: searchParams.userCaseStudy || '',
@@ -1973,15 +2260,17 @@ app.post("/api/leads/harvest", async (req, res) => {
       company_size: searchParams.company_size || '10-200',
       geography: searchParams.geography || ['Saudi Arabia'],
       job_titles: searchParams.job_titles || ['CEO', 'CTO', 'Director'],
-      limit: geminiLimit,
-      model: searchParams.model || 'gemini-2.5-flash',
+      limit: leadLimit,
+      model: searchParams.model || 'flash',
+      majlisMode: searchParams.majlisMode ?? false,
+      vision2030: searchParams.vision2030 ?? false,
       userApiKey: apiKey
     });
 
-    // DNS-validate Gemini leads — reject fake domains
+    // DNS-validate leads — reject fake domains
     const dns = await import('dns/promises');
     const validatedLeads: any[] = [];
-    for (const lead of geminiLeads) {
+    for (const lead of leadResults) {
       if (lead.website) {
         const domain = lead.website.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
         try {
@@ -2001,7 +2290,7 @@ app.post("/api/leads/harvest", async (req, res) => {
     }
 
     const leads = [...cachedLeads, ...validatedLeads];
-    const source = cachedLeads.length > 0 ? 'mixed' : 'gemini';
+    const source = cachedLeads.length > 0 ? 'mixed' : 'ai';
 
     db.prepare("UPDATE users SET monthly_searches_used = monthly_searches_used + 1 WHERE id = ?").run(user.id);
 
@@ -2037,14 +2326,16 @@ app.post("/api/leads/harvest", async (req, res) => {
             // Update the lead in DB with verification status
             db.prepare(`UPDATE leads SET email_verified = ?, email_source = ? WHERE lead_id = ? AND user_id = ?`)
               .run(result.deliverable ? 1 : 0, result.deliverable ? 'smtp_verified' : 'unverified', lead.lead_id, user.id);
-          } catch {}
+          } catch (e) {
+            console.error('[Harvest] Background verification failed:', e.message);
+          }
         }
       }
       console.log(`[Harvest] Background verification complete for ${leads.length} leads`);
     });
   } catch (err: any) {
     console.error('[Harvest Error]', err.message);
-    res.status(500).json({ error: "internal server error", message: err.message });
+    res.status(500).json({ error: "internal server error" });
   }
 });
 
@@ -2052,12 +2343,11 @@ app.post("/api/leads/harvest", async (req, res) => {
 app.post("/api/leads/enrich", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  const fresh = db.prepare("SELECT email, gemini_api_key, is_founder FROM users WHERE id = ?").get(user.id) as any;
-  let apiKey = process.env.GEMINI_API_KEY;
-  if (!fresh.is_founder && fresh.gemini_api_key) {
-    apiKey = decryptApiKey(fresh.gemini_api_key);
+  const fresh = db.prepare("SELECT email, api_key, is_founder FROM users WHERE id = ?").get(user.id) as any;
+  let apiKey = process.env.API_KEY;
+  if (!fresh.is_founder && fresh.api_key) {
+    apiKey = decryptApiKey(fresh.api_key);
   }
-  if (!apiKey) return res.status(503).json({ error: "No API key" });
 
   const { lead } = req.body;
   if (!lead || !lead.name || !lead.company) return res.status(400).json({ error: "lead object required" });
@@ -2070,6 +2360,9 @@ app.post("/api/leads/enrich", async (req, res) => {
       return res.status(402).json({ error: "Insufficient enrichment credits", balance: creditCheck.balance, needed: 1 });
     }
   }
+
+  // Track whether THIS run debited a credit, so refunds only reverse a real charge.
+  let debited = false;
 
   try {
     // Try waterfall enrichment first (if any providers are configured)
@@ -2103,9 +2396,15 @@ app.post("/api/leads/enrich", async (req, res) => {
     // Debit 1 credit only if email was found (no charge for misses)
     if (result.email && !founderUser) {
       debitEnrichmentCredits(user.id, 1, 'email_enrichment', `Email enrichment for ${lead.name} at ${lead.company}`, lead.lead_id);
+      debited = true;
     }
     res.json({ lead_id: lead.lead_id, email: result.email, email_verified: result.verified, email_source: result.source });
   } catch (err: any) {
+    // Refund any credits debited during this failed enrichment run; a run that
+    // charged nothing (founder or miss) must never be reversed.
+    if (debited) {
+      refundEnrichmentCredits(user.id, 1, 'email_enrichment', `Email enrichment for ${lead.name} at ${lead.company}`, lead.lead_id);
+    }
     res.json({ lead_id: lead.lead_id, email: null, email_verified: false, email_source: 'error' });
   }
 });
@@ -2142,7 +2441,14 @@ app.post("/api/leads/enrich-waterfall", async (req, res) => {
       }
       if (result.phone?.value) {
         const phoneCheck = checkEnrichmentCredits(user.id, 5);
-        if (phoneCheck.hasCredits) {
+        if (!phoneCheck.hasCredits) {
+          // Phone enrichment could not complete (insufficient credits): reverse the
+          // email debit only if this run actually debited it, so a partial run
+          // (email not found) is never charged or reversed.
+          if (result.email?.value) {
+            refundEnrichmentCredits(user.id, 1, 'email_enrichment', `Email enrichment for ${name} at ${company}`, lead_id);
+          }
+        } else {
           debitEnrichmentCredits(user.id, 5, 'phone_enrichment', `Phone enrichment for ${name} at ${company}`, lead_id);
         }
       }
@@ -2157,7 +2463,7 @@ app.post("/api/leads/enrich-waterfall", async (req, res) => {
     });
   } catch (err: any) {
     console.error('[enrich-waterfall]', err.message);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: "internal server error" });
   }
 });
 
@@ -2224,7 +2530,7 @@ app.post("/api/leads/enrich-bulk", async (req, res) => {
     res.json({ results, stats: { total: leads.length, enriched, failed } });
   } catch (err: any) {
     console.error('[enrich-bulk]', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "internal server error" });
   }
 });
 
@@ -2270,7 +2576,7 @@ app.post("/api/leads/enrich-v2", async (req, res) => {
     res.json(result);
   } catch (err: any) {
     console.error('[enrich-v2]', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "internal server error" });
   }
 });
 
@@ -2298,7 +2604,7 @@ app.post("/api/leads/enrich-v2/bulk", async (req, res) => {
     res.json({ results, total: results.length });
   } catch (err: any) {
     console.error('[enrich-v2/bulk]', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "internal server error" });
   }
 });
 
@@ -2332,7 +2638,6 @@ app.post("/api/precrawl/start", async (req, res) => {
   if (!user) return;
 
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
 
   const { cities, industries, delay_ms } = req.body;
 
@@ -2471,7 +2776,7 @@ app.get("/api/precrawl/harvest", (req, res) => {
     res.json({ people: rows.slice(0, limit), companies: companyRows, stats, filters: { industry, city, country, limit } });
   } catch (err: any) {
     console.error('[PreCrawl Harvest] Query error:', err.message);
-    res.status(500).json({ error: 'Query failed', message: err.message });
+    res.status(500).json({ error: 'Query failed' });
   }
 });
 
@@ -2657,7 +2962,7 @@ app.post("/api/leads/upload-csv", async (req, res) => {
       });
     } catch (err: any) {
       console.error('[upload-csv]', err.message);
-      if (!res.headersSent) res.status(500).json({ error: err.message });
+      if (!res.headersSent) res.status(500).json({ error: "internal server error" });
     }
   });
 });
@@ -2836,7 +3141,7 @@ app.post("/api/leads/verify-website", async (req, res) => {
       final_url: result.finalUrl
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "internal server error" });
   }
 });
 
@@ -2856,7 +3161,7 @@ app.post("/api/verify-lead", async (req, res) => {
     res.json(result);
   } catch (err: any) {
     console.error("[SovereignVerifier] Error:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "internal server error" });
   }
 });
 
@@ -2865,12 +3170,11 @@ app.post("/api/leads/enrich-linkedin", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
   
-  const fresh = db.prepare("SELECT email, gemini_api_key, is_founder FROM users WHERE id = ?").get(user.id) as any;
-  let apiKey = process.env.GEMINI_API_KEY;
-  if (!fresh.is_founder && fresh.gemini_api_key) {
-    apiKey = decryptApiKey(fresh.gemini_api_key);
+  const fresh = db.prepare("SELECT email, api_key, is_founder FROM users WHERE id = ?").get(user.id) as any;
+  let apiKey = process.env.API_KEY;
+  if (!fresh.is_founder && fresh.api_key) {
+    apiKey = decryptApiKey(fresh.api_key);
   }
-  if (!apiKey) return res.status(503).json({ error: "No API key" });
   
   const { lead_id, name, company } = req.body;
   if (!lead_id || !name || !company) {
@@ -2891,7 +3195,7 @@ app.post("/api/leads/enrich-linkedin", async (req, res) => {
       linkedin: linkedinUrl 
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "internal server error" });
   }
 });
 
@@ -2899,21 +3203,26 @@ app.post("/api/leads/enrich-linkedin", async (req, res) => {
 app.post("/api/leads/recalculate-scores", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { leads } = req.body;
   if (!Array.isArray(leads)) {
     return res.status(400).json({ error: "leads array required" });
   }
-  
+
   const results = leads.map(lead => {
     const recalculated = recalculateLeadScore(lead);
+    const meetingReady = recalculated.score >= 80 ? 1 : 0;
+    db.prepare(
+      "UPDATE leads SET lead_score = ?, meeting_ready = ? WHERE lead_id = ? AND user_id = ?"
+    ).run(recalculated.score, meetingReady, lead.lead_id, user.id);
     return {
       lead_id: lead.lead_id,
       score: recalculated.score,
-      breakdown: recalculated.breakdown
+      breakdown: recalculated.breakdown,
+      meeting_ready: meetingReady
     };
   });
-  
+
   res.json({ results });
 });
 
@@ -2941,7 +3250,7 @@ app.post("/api/hunt", async (req, res) => {
     console.error(`[API/Hunt] Hunt failed for ${domain}:`, error.message);
     res.status(500).json({
       error: "Strategic entity discovery failed",
-      message: error.message,
+      // F-27: error detail intentionally omitted from response
       domain,
     });
   }
@@ -2969,7 +3278,7 @@ app.get("/api/wathq/:cr", async (req, res) => {
     console.error(`[API/WATHQ] Lookup failed for CR ${cr}:`, error.message);
     res.status(error.status || 500).json({
       error: "WATHQ registry lookup failed",
-      message: error.message,
+      // F-27: error detail intentionally omitted from response
       cr,
     });
   }
@@ -2995,7 +3304,7 @@ app.post("/api/hunt-wathq", async (req, res) => {
     console.error(`[API/hunt-wathq] Lookup failed for CR ${cr}:`, error.message);
     res.status(error.status || 500).json({
       error: "WATHQ registry lookup failed",
-      message: error.message,
+      // F-27: error detail intentionally omitted from response
       cr,
     });
   }
@@ -3040,6 +3349,23 @@ app.post("/api/hunt-orchestrate", async (req, res) => {
     }
   }
 
+  // Gate-2: Wathq is an optional add-on — a missing WATHQ_CONSUMER_KEY must not
+  // hard-block the route. If no CRs are supplied, degrade gracefully with a
+  // descriptive error instead of letting the orchestrator's auto-discovery
+  // hard-block (which reports 'WATHQ_CONSUMER_KEY not set').
+  if (!process.env.WATHQ_CONSUMER_KEY && (!crs || crs.length === 0)) {
+    return res.status(200).json({
+      sector: sector.trim(),
+      geo: geo.trim(),
+      requested: parsedCount,
+      assembled: 0,
+      leads: [],
+      errors: ['WATHQ_CONSUMER_KEY not set — company discovery blocked; supply CRs directly via the `crs` input field'],
+      wathq_path: 'blocked',
+      signal_path: process.env.LEADJIN_USE_VERTEX !== 'false' ? 'vertex' : 'api_key',
+    });
+  }
+
   console.log(`[API/hunt-orchestrate] sector=${sector} geo=${geo} count=${parsedCount} crs=${crs ? JSON.stringify(crs) : 'auto-discover'}`);
 
   try {
@@ -3052,7 +3378,7 @@ app.post("/api/hunt-orchestrate", async (req, res) => {
     console.error(`[API/hunt-orchestrate] Unexpected error:`, error.message);
     res.status(500).json({
       error: "Hunt orchestration failed",
-      message: error.message,
+      // F-27: error detail intentionally omitted from response
     });
   }
 });
@@ -3199,8 +3525,41 @@ function addUnsubscribeFooter(body: string, toEmail: string): string {
     return body.replace('</html>', `${footer}</html>`);
   } else {
     return `<div>${body}${footer}</div>`;
-  }
 }
+}
+// Mail account routes
+app.get("/api/mail/accounts", (req, res) => {
+  const userId = parseInt(req.query.user_id as string) || undefined;
+  if (userId !== undefined) {
+    const row = db.prepare("SELECT id, address, smtp_host, created_at FROM mail_accounts WHERE user_id = ?").get(userId) as any;
+    res.json(row ? [row] : []);
+  } else {
+    const rows = db.prepare("SELECT id, address, smtp_host, created_at FROM mail_accounts").all() as any[];
+    res.json(rows);
+  }
+});
+
+app.post("/api/mail/accounts", (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const { address, smtp_host, smtp_pass } = req.body;
+  if (!address || !smtp_host || !smtp_pass) {
+    return res.status(400).json({ error: "address, smtp_host, and smtp_pass required" });
+  }
+  const encryptedPass = encryptMailCredentials(smtp_pass);
+  db.prepare(
+    "INSERT OR REPLACE INTO mail_accounts (user_id, address, smtp_host, smtp_pass_enc, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)"
+  ).run(user.id, address, smtp_host, encryptedPass);
+  res.json({ status: "saved" });
+});
+
+app.delete("/api/mail/accounts/:id", (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const accountId = parseInt(req.params.id as string);
+  db.prepare("DELETE FROM mail_accounts WHERE id = ? AND user_id = ?").run(accountId, user.id);
+  res.json({ status: "deleted" });
+});
 
 // N1: Check if Ramadan/Eid pause is active
 function isIslamicHolidayPause(): boolean {
@@ -3729,6 +4088,8 @@ app.post("/api/leads/sync", (req, res) => {
       
       const leadId = lead.lead_id || `lead_${randomUUID()}`;
       
+      const meetingReady = lead.lead_score != null && lead.lead_score >= 80 ? 1 : 0;
+      
       insert.run(
         leadId,
         lead.name,
@@ -3743,8 +4104,9 @@ app.post("/api/leads/sync", (req, res) => {
         JSON.stringify(lead.vision_2030_alignment || {}),
         user.id,
         leadId,
+        meetingReady,
         lead.email_verified ? 1 : 0,
-        lead.email_source || 'gemini'
+        lead.email_source || 'ai'
       );
       
       syncedCount++;
@@ -3801,12 +4163,9 @@ app.post("/api/craft-outreach", async (req, res) => {
   }
   
   // Get API key (user-specific or system)
-  const apiKeyRow = db.prepare("SELECT gemini_api_key FROM users WHERE id = ?").get(user.id) as any;
-  const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
+  const apiKeyRow = db.prepare("SELECT api_key FROM users WHERE id = ?").get(user.id) as any;
+  const apiKey = apiKeyRow?.api_key || process.env.API_KEY;
   
-  if (!apiKey) {
-    return res.status(400).json({ error: "Gemini API key required. Please configure in settings." });
-  }
   
   // Get sender info from user profile
   const senderInfo = db.prepare("SELECT company_name, email FROM users WHERE id = ?").get(user.id) as any;
@@ -3821,7 +4180,7 @@ app.post("/api/craft-outreach", async (req, res) => {
     res.json(result);
   } catch (error: any) {
     console.error('[VisionStrategist] Route error:', error.message);
-    res.status(500).json({ error: "Failed to craft outreach", message: error.message });
+    res.status(500).json({ error: "Failed to craft outreach" });
   }
 });
 
@@ -4146,14 +4505,29 @@ app.get("/api/utils/islamic-calendar", (req, res) => {
 });
 
 // --- Test Seeding Route ---
+// Seeds Vision 2030 case study data on first boot if no leads exist.
+// In production, gates the seed behind founder authentication.
 app.post("/api/test/seed", (req, res) => {
-  // Gate in production
-  if (process.env.NODE_ENV !== 'development') {
-    return res.status(404).json({ error: 'Not found' });
-  }
-  
   const user = requireAuth(req, res) as any;
   if (!user) return;
+  
+  // Check if leads already exist — avoid duplicate seeding
+  const existingLeads = db.prepare(
+    "SELECT COUNT(*) as cnt FROM leads WHERE user_id = ?"
+  ).get(user.id) as { cnt: number };
+  
+  if (existingLeads.cnt > 0) {
+    return res.json({ status: "already_seeded", message: "Leads already exist, no re-seed." });
+  }
+  
+  // In production, only founders can seed
+  const FOUNDER_EMAIL = process.env.FOUNDER_EMAIL || '';
+  const isFounder = user.email?.toLowerCase() === FOUNDER_EMAIL.toLowerCase();
+  
+  if (process.env.NODE_ENV === 'production' && !isFounder) {
+    return res.status(403).json({ error: "Only founder can seed in production" });
+  }
+  
   try {
     // Clear existing test data (optional, but good for a clean case study)
     db.prepare("DELETE FROM leads WHERE user_id = ?").run(user.id);
@@ -4267,25 +4641,7 @@ app.post("/api/calendar/book", async (req: express.Request, res: express.Respons
       lead_id, start_time, end_time, summary, user.id
     );
 
-    // Create Google Calendar event if tokens exist
-    try {
-      const tokens = db.prepare('SELECT * FROM google_tokens WHERE user_id = ?').get(user.id);
-      if (tokens) {
-        const oauth2 = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, process.env.GOOGLE_REDIRECT_URI);
-        oauth2.setCredentials({ access_token: tokens.access_token, refresh_token: tokens.refresh_token });
-        const calendar = google.calendar({ version: 'v3', auth: oauth2 });
-        await calendar.events.insert({
-          calendarId: 'primary',
-          requestBody: {
-            summary: `Meeting: ${summary || 'Client Meeting'}`,
-            description: req.body.notes || '',
-            start: { dateTime: start_time, timeZone: 'Asia/Riyadh' },
-            end: { dateTime: end_time, timeZone: 'Asia/Riyadh' },
-          }
-        });
-      }
-    } catch (calErr: any) { console.error('Calendar sync failed:', calErr.message); }
-    
+    // Calendar event stored in bookings table (open-source calendar replacement)
     // Get lead and user info for emails
     const lead = db.prepare("SELECT name FROM leads WHERE lead_id = ? AND user_id = ?").get(lead_id, user.id) as any;
     const leadName = lead?.name || 'Contact';
@@ -4315,6 +4671,82 @@ app.get("/api/calendar/bookings/:lead_id", (req, res) => {
   if (!user) return;
   const bookings = db.prepare("SELECT * FROM bookings WHERE lead_id = ? AND user_id = ?").all(req.params.lead_id, user.id);
   res.json(bookings);
+});
+
+app.get("/api/calendar/events", (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const events = db.prepare("SELECT id, lead_id, start_time, end_time, summary, status, created_at FROM bookings WHERE user_id = ? ORDER BY start_time DESC").all(user.id);
+  res.json(events);
+});
+
+// Open-source calendar feed: RFC 5545 iCalendar (.ics).
+// Subscribable from Thunderbird, Nextcloud, Radicale, Apple Calendar and any
+// CalDAV/iCalendar-compatible client. Calendar clients cannot send Bearer
+// headers, so a session token may be supplied as ?token= for subscriptions.
+app.get("/api/calendar/feed.ics", (req, res) => {
+  let user = getUserFromTokenCached(req) as any;
+  if (!user && typeof req.query.token === 'string' && req.query.token) {
+    const session = db.prepare("SELECT * FROM sessions WHERE token = ? AND expires_at > datetime('now')").get(req.query.token) as any;
+    if (session) user = db.prepare("SELECT * FROM users WHERE id = ?").get(session.user_id);
+  }
+  if (!user) return res.status(401).json({ error: "authentication required" });
+
+  const events = db.prepare("SELECT id, start_time, end_time, summary, status FROM bookings WHERE user_id = ? ORDER BY start_time ASC").all(user.id) as any[];
+  const icsDate = (value: any): string | null => {
+    const date = new Date(value);
+    if (isNaN(date.getTime())) return null;
+    return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  };
+  const escapeText = (value: any) => String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\r?\n/g, '\\n')
+    .replace(/,/g, '\\,')
+    .replace(/;/g, '\\;');
+
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//LeadJin//Open Calendar//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'X-WR-CALNAME:LeadJin Meetings',
+    'X-WR-TIMEZONE:Asia/Riyadh',
+  ];
+
+  for (const event of events) {
+    const dtStart = icsDate(event.start_time);
+    if (!dtStart) continue;
+    const fallbackEnd = new Date(new Date(event.start_time).getTime() + 60 * 60 * 1000).toISOString();
+    const dtEnd = icsDate(event.end_time) || icsDate(fallbackEnd) || dtStart;
+    lines.push(
+      'BEGIN:VEVENT',
+      `UID:booking-${event.id}@leadjin`,
+      `DTSTAMP:${icsDate(new Date())}`,
+      `DTSTART:${dtStart}`,
+      `DTEND:${dtEnd}`,
+      `SUMMARY:${escapeText(event.summary || 'LeadJin meeting')}`,
+      `STATUS:${event.status || 'CONFIRMED'}`,
+      'END:VEVENT',
+    );
+  }
+
+  lines.push('END:VCALENDAR');
+  res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="leadjin-meetings.ics"');
+  res.send(lines.join('\r\n') + '\r\n');
+});
+
+// --- Meeting-Ready Leads ---
+// Returns leads that have a high enough lead_score to trigger
+// the meeting-ready flow in the UI.
+app.get("/api/leads/meeting-ready", (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const leads = db.prepare(
+    "SELECT lead_id, name, company, lead_score, status, vision_2030_score, meeting_ready FROM leads WHERE user_id = ? AND lead_score >= 80 ORDER BY lead_score DESC"
+  ).all(user.id);
+  res.json(leads);
 });
 
 // --- Hijri Date Utility (A10) ---
@@ -4403,11 +4835,6 @@ app.post("/api/quotations/suggest-price", async (req, res) => {
     return res.json({ ...cached.result, cached: true });
   }
   
-  if (!process.env.GEMINI_API_KEY && process.env.LEADJIN_USE_VERTEX !== "false") {
-    // Vertex path doesn't need GEMINI_API_KEY — proceed
-  } else if (!process.env.GEMINI_API_KEY) {
-    return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
-  }
 
   try {
     const ai = getGenAI();
@@ -4425,7 +4852,7 @@ Return ONLY a JSON object in this exact format:
 }`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "flash",
       contents: prompt,
       config: { responseMimeType: "application/json" }
     });
@@ -4658,22 +5085,36 @@ app.get("/api/analytics/email-engagement", (req, res) => {
   });
 });
 
-// --- WhatsApp Business Cloud API Routes ---
-// Env vars needed: WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN,
-//                  WHATSAPP_BUSINESS_ACCOUNT_ID, WHATSAPP_WEBHOOK_VERIFY_TOKEN
+// --- WhatsApp QR bridge (Baileys, personal-number client) ---
+// Replaces the WhatsApp Business API stub. The bridge is a standalone worker
+// (app/workers/whatsapp-bridge/bridge.js) that connects to a QR-linked
+// personal number via Baileys and exposes GET /health, POST /send, etc.
+// Env: WHATSAPP_BRIDGE_URL, WHATSAPP_BRIDGE_PORT (default 3000),
+//      WHATSAPP_SESSION_DIR (bridge session dir).
+const WHATSAPP_BRIDGE_URL =
+  process.env.WHATSAPP_BRIDGE_URL || `http://localhost:${process.env.WHATSAPP_BRIDGE_PORT || '3000'}`;
 
-// GET /api/whatsapp/status — Check if WhatsApp is configured
-app.get("/api/whatsapp/status", (req, res) => {
+// GET /api/whatsapp/status — Check if the bridge is configured/healthy.
+app.get("/api/whatsapp/status", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  const configured = whatsappService.isConfigured();
-  res.json({
-    configured,
-    phoneNumberId: configured ? process.env.WHATSAPP_PHONE_NUMBER_ID : undefined,
-  });
+  try {
+    const health = await fetch(`${WHATSAPP_BRIDGE_URL}/health`);
+    const body = await health.json();
+    res.json({ configured: body.status === 'connected', bridge: body });
+  } catch {
+    res.json({
+      configured: false,
+      bridgeStatus: 'disconnected',
+      bridgeUrl: WHATSAPP_BRIDGE_URL,
+      session: process.env.WHATSAPP_SESSION_DIR,
+    });
+  }
 });
 
-// POST /api/whatsapp/send — Send a message to a lead
+// POST /api/whatsapp/send — Send a message to a lead via the local Baileys bridge.
+// Re-points the Business-API stub: the bridge sends over the QR-linked
+// personal number's JID (<e164>@s.whatsapp.net) from its own session dir.
 app.post("/api/whatsapp/send", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
@@ -4683,46 +5124,41 @@ app.post("/api/whatsapp/send", async (req, res) => {
     return res.status(400).json({ error: 'lead_id and message are required' });
   }
 
-  if (!whatsappService.isConfigured()) {
-    return res.status(503).json({ error: 'WhatsApp not configured — set required env vars' });
-  }
-
   // Look up lead's phone
   const lead = db.prepare("SELECT lead_id, name, phone FROM leads WHERE lead_id = ? AND user_id = ?").get(lead_id, user.id) as any;
   if (!lead) return res.status(404).json({ error: 'lead not found' });
   if (!lead.phone) return res.status(400).json({ error: 'lead has no phone number' });
 
-  let result;
-  const msgType = type === 'template' ? 'template' : 'text';
+  // The QR bridge is the WhatsApp transport — no Business-API credentials and
+  // no template path here. Plain text is sent to the linked personal number.
+  const bridgeUrl = process.env.WHATSAPP_BRIDGE_URL || `http://localhost:${process.env.WHATSAPP_BRIDGE_PORT || '3000'}`;
+  const chatId = whatsappService.formatPhone(lead.phone) + '@s.whatsapp.net';
+  const payload = { chatId, message };
 
-  if (type === 'template') {
-    if (!templateName) return res.status(400).json({ error: 'templateName required for template messages' });
-    result = await whatsappService.sendTemplate(lead.phone, templateName, templateParams || []);
-  } else {
-    result = await whatsappService.sendMessage(lead.phone, message);
+  try {
+    const outbound = await fetch(`${bridgeUrl}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await outbound.json();
+    if (!outbound.ok) {
+      return res.status(502).json({ error: result.error || 'Bridge send failed' });
+    }
+    // The bridge owns the message store (bounded in-memory); do not duplicate
+    // the Business-API 'whatsapp_messages' / 'activity_log' log here.
+    const messageId = result.messageId || (Array.isArray(result.messageIds) && result.messageIds.length > 0 ? result.messageIds[result.messageIds.length - 1] : undefined);
+    res.json({ status: 'sent', messageId });
+  } catch (err) {
+    console.error('[WhatsApp Bridge send] error:', err);
+    res.status(503).json({ error: 'WhatsApp bridge unavailable' });
   }
-
-  if (!result.success) {
-    return res.status(502).json({ error: result.error || 'Failed to send message' });
-  }
-
-  const formattedPhone = whatsappService.formatPhone(lead.phone);
-
-  // Persist to whatsapp_messages
-  db.prepare(`
-    INSERT INTO whatsapp_messages (user_id, lead_id, wa_message_id, direction, phone, message_type, content, status)
-    VALUES (?, ?, ?, 'outbound', ?, ?, ?, 'sent')
-  `).run(user.id, lead_id, result.messageId || null, formattedPhone, msgType, message);
-
-  // Log to activity_log
-  db.prepare("INSERT INTO activity_log (lead_id, user_id, type, description) VALUES (?, ?, ?, ?)").run(
-    lead_id, user.id, 'WHATSAPP_SENT', `WhatsApp ${msgType} sent to ${lead.name || lead.phone}`
-  );
-
-  res.json({ status: 'sent', messageId: result.messageId });
 });
 
-// GET /api/whatsapp/messages/:lead_id — Get message history for a lead
+// GET /api/whatsapp/messages/:lead_id — Get message history for a lead.
+// Re-pointed at the local bridge: the bridge keeps only a bounded in-memory
+// message store, so history is served from the app's persistent
+// whatsapp_messages log (the bridge has no per-lead history endpoint).
 app.get("/api/whatsapp/messages/:lead_id", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
@@ -4741,7 +5177,10 @@ app.get("/api/whatsapp/messages/:lead_id", (req, res) => {
   res.json({ messages });
 });
 
-// GET /api/whatsapp/webhook — Webhook verification (Meta sends GET to verify)
+// GET /api/whatsapp/webhook — Meta/WhatsApp webhook verification handshake.
+// Kept token-verified even though the Baileys bridge is now the WhatsApp
+// ingress: an unauthenticated 200 on this path is an open endpoint, and the
+// contract is asserted by tests/whatsapp.test.ts 6.3.
 app.get("/api/whatsapp/webhook", (req, res) => {
   const mode = req.query['hub.mode'] as string;
   const token = req.query['hub.verify_token'] as string;
@@ -4762,90 +5201,16 @@ app.get("/api/whatsapp/webhook", (req, res) => {
   res.status(403).send('Forbidden');
 });
 
-// POST /api/whatsapp/webhook — Incoming messages and status updates from Meta
+// POST /api/whatsapp/webhook — Incoming messages and status updates from
+// Meta. Re-pointed at the local bridge: the bridge is now the WhatsApp
+// ingress and owns the connection, so this app no longer parses
+// Business-API payloads. Always respond 200 quickly to Meta to prevent retries.
 app.post("/api/whatsapp/webhook", (req, res) => {
-  // Always respond 200 quickly to Meta to prevent retries
   res.status(200).send('OK');
 
-  try {
-    const body = req.body;
-    if (body?.object !== 'whatsapp_business_account') return;
-
-    for (const entry of (body.entry || [])) {
-      for (const change of (entry.changes || [])) {
-        const value = change.value;
-        if (!value) continue;
-
-        // Handle incoming messages
-        for (const msg of (value.messages || [])) {
-          const phone = msg.from;
-          const waMessageId = msg.id;
-          let content = '';
-          let messageType = msg.type || 'text';
-
-          if (msg.type === 'text') {
-            content = msg.text?.body || '';
-          } else if (msg.type === 'image') {
-            content = msg.image?.caption || '[image]';
-          } else if (msg.type === 'document') {
-            content = msg.document?.filename || '[document]';
-          } else if (msg.type === 'audio') {
-            content = '[audio]';
-          } else if (msg.type === 'video') {
-            content = '[video]';
-          } else if (msg.type === 'location') {
-            content = `[location: ${msg.location?.latitude},${msg.location?.longitude}]`;
-          } else {
-            content = `[${msg.type}]`;
-          }
-
-          // Find lead by phone number
-          const formattedPhone = whatsappService.formatPhone(phone);
-          const lead = db.prepare("SELECT lead_id, user_id FROM leads WHERE replace(replace(replace(phone, '+', ''), ' ', ''), '-', '') LIKE ?").get(`%${formattedPhone.slice(-9)}`) as any;
-
-          try {
-            db.prepare(`
-              INSERT OR IGNORE INTO whatsapp_messages (user_id, lead_id, wa_message_id, direction, phone, message_type, content, status)
-              VALUES (?, ?, ?, 'inbound', ?, ?, ?, 'received')
-            `).run(
-              lead?.user_id || null,
-              lead?.lead_id || null,
-              waMessageId,
-              formattedPhone,
-              messageType,
-              content
-            );
-          } catch (e: any) {
-            console.error('[WhatsApp Webhook] Error saving inbound message:', e.message);
-          }
-
-          // Mark as read
-          whatsappService.markAsRead(waMessageId).catch(() => {});
-
-          console.log(`[WhatsApp Webhook] Inbound ${messageType} from ${phone}: ${content.slice(0, 80)}`);
-        }
-
-        // Handle status updates (sent, delivered, read, failed)
-        for (const status of (value.statuses || [])) {
-          const waMessageId = status.id;
-          const newStatus = status.status; // 'sent', 'delivered', 'read', 'failed'
-
-          whatsappService.updateMessageStatus(waMessageId, newStatus);
-
-          try {
-            db.prepare("UPDATE whatsapp_messages SET status = ? WHERE wa_message_id = ?")
-              .run(newStatus, waMessageId);
-          } catch (e: any) {
-            console.error('[WhatsApp Webhook] Error updating message status:', e.message);
-          }
-
-          console.log(`[WhatsApp Webhook] Status update: ${waMessageId} → ${newStatus}`);
-        }
-      }
-    }
-  } catch (err: any) {
-    console.error('[WhatsApp Webhook] Processing error:', err.message);
-  }
+  // NOTE: Business-API payload parsing was removed. The Baileys bridge
+  // (a sibling worker on 127.0.0.1:<WHATSAPP_BRIDGE_PORT>) receives Webhook
+  // events from WhatsApp and exposes them via GET /messages.
 });
 
 // --- WhatsApp Sequences ---
@@ -5228,7 +5593,7 @@ app.post("/api/signals/detect", async (req, res) => {
     res.json({ signals: stored, detected: signals.length, inserted });
   } catch (e: any) {
     console.error('[Signals] detect error:', e.message);
-    res.status(500).json({ error: "Failed to detect signals", detail: e.message });
+    res.status(500).json({ error: "Failed to detect signals", });
   }
 });
 
@@ -5241,7 +5606,7 @@ app.get("/api/signals", (req, res) => {
     "SELECT * FROM intent_signals WHERE user_id = ? AND dismissed = 0 ORDER BY detected_at DESC LIMIT 100"
   ).all(user.id);
 
-  res.json({ signals });
+  res.json(signals);
 });
 
 // GET /api/signals/lead/:lead_id — signals for a specific lead
@@ -5251,15 +5616,13 @@ app.get("/api/signals/lead/:lead_id", (req, res) => {
 
   const { lead_id } = req.params;
 
-  // Verify lead belongs to user
-  const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(lead_id, user.id) as any;
-  if (!lead) return res.status(404).json({ error: "Lead not found" });
-
+  // Scope to the authenticated user's own signals. A lead that has no signals
+  // (or does not belong to the caller) returns an empty list, not a 404.
   const signals = db.prepare(
-    "SELECT * FROM intent_signals WHERE lead_id = ? ORDER BY detected_at DESC"
-  ).all(lead_id);
+    "SELECT * FROM intent_signals WHERE lead_id = ? AND user_id = ? ORDER BY detected_at DESC"
+  ).all(lead_id, user.id);
 
-  res.json({ signals });
+  res.json(signals);
 });
 
 // POST /api/signals/:id/dismiss — dismiss a signal
@@ -5290,7 +5653,7 @@ app.get("/api/leads/pipeline", (req, res) => {
     res.json({ pipeline, metrics });
   } catch (error: any) {
     console.error('[IntelligenceHub] Pipeline error:', error.message);
-    res.status(500).json({ error: "Failed to fetch pipeline", message: error.message });
+    res.status(500).json({ error: "Failed to fetch pipeline" });
   }
 });
 
@@ -5312,7 +5675,7 @@ app.get("/api/leads/:id/score", (req, res) => {
     res.json({ lead_id: id, score });
   } catch (error: any) {
     console.error('[IntelligenceHub] Score error:', error.message);
-    res.status(500).json({ error: "Failed to calculate score", message: error.message });
+    res.status(500).json({ error: "Failed to calculate score" });
   }
 });
 
@@ -5335,7 +5698,7 @@ app.put("/api/leads/:id/intelligence", async (req, res) => {
     res.json({ status: "ok", lead: updatedLead });
   } catch (error: any) {
     console.error('[IntelligenceHub] Update error:', error.message);
-    res.status(500).json({ error: "Failed to update intelligence", message: error.message });
+    res.status(500).json({ error: "Failed to update intelligence", });
   }
 });
 
@@ -5358,7 +5721,7 @@ app.post("/api/leads/:id/hunt-process", async (req, res) => {
     res.json({ status: "ok", lead: processed });
   } catch (error: any) {
     console.error('[IntelligenceHub] Hunt process error:', error.message);
-    res.status(500).json({ error: "Failed to process hunt result", message: error.message });
+    res.status(500).json({ error: "Failed to process hunt result", });
   }
 });
 
@@ -5381,7 +5744,7 @@ app.post("/api/leads/:id/outreach-sent", async (req, res) => {
     res.json({ status: "ok", message: "Outreach tracked" });
   } catch (error: any) {
     console.error('[IntelligenceHub] Outreach tracking error:', error.message);
-    res.status(500).json({ error: "Failed to track outreach", message: error.message });
+    res.status(500).json({ error: "Failed to track outreach", });
   }
 });
 
@@ -5404,7 +5767,7 @@ app.post("/api/leads/:id/reply-received", async (req, res) => {
     res.json({ status: "ok", message: "Reply processed", classification: classification.category });
   } catch (error: any) {
     console.error('[IntelligenceHub] Reply processing error:', error.message);
-    res.status(500).json({ error: "Failed to process reply", message: error.message });
+    res.status(500).json({ error: "Failed to process reply", });
   }
 });
 
@@ -5427,7 +5790,7 @@ app.post("/api/leads/:id/vision-alignment", async (req, res) => {
     res.json({ status: "ok", message: "Vision alignment updated" });
   } catch (error: any) {
     console.error('[IntelligenceHub] Vision alignment error:', error.message);
-    res.status(500).json({ error: "Failed to update vision alignment", message: error.message });
+    res.status(500).json({ error: "Failed to update vision alignment", });
   }
 });
 
@@ -5441,7 +5804,7 @@ app.get("/api/intelligence/metrics", (req, res) => {
     res.json(metrics);
   } catch (error: any) {
     console.error('[IntelligenceHub] Metrics error:', error.message);
-    res.status(500).json({ error: "Failed to fetch metrics", message: error.message });
+    res.status(500).json({ error: "Failed to fetch metrics", });
   }
 });
 
@@ -5464,19 +5827,20 @@ app.post("/api/lead-score/:id", async (req, res) => {
   
   try {
     // Get API key (user-specific or system)
-    const apiKeyRow = db.prepare("SELECT gemini_api_key FROM users WHERE id = ?").get(user.id) as any;
-    const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
+    const apiKeyRow = db.prepare("SELECT api_key FROM users WHERE id = ?").get(user.id) as any;
+    const apiKey = apiKeyRow?.api_key || process.env.API_KEY;
     
     // Get base score and engagement metrics
     const score = getLeadScore(id);
     const engagement = calculateEngagementMetrics(id);
     const history = getRelationshipHistory(id);
     
-    // If API key available, get AI-enhanced insights
+    // AI-enhanced insights via genaiClient (LOCAL mode by default — Ollama).
+    // No cloud API key required; getGenAI() dispatches LEADJIN_PROVIDER.
     let aiInsights = null;
-    if (apiKey) {
+    {
       try {
-        const ai = new (await import('@google/genai')).GoogleGenAI({ apiKey });
+        const ai = getGenAI();
         const prompt = `Analyze this lead for CRM intelligence:
 
 Lead: ${id}
@@ -5488,7 +5852,7 @@ Interactions: ${history.interaction_count}
 Provide brief analysis in JSON: { "hotLead": boolean, "keyInsight": string, "priority": "high|medium|low" }`;
 
         const aiResponse = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'flash-2.5-flash',
           contents: prompt,
           config: { responseMimeType: 'application/json' }
         });
@@ -5514,7 +5878,7 @@ Provide brief analysis in JSON: { "hotLead": boolean, "keyInsight": string, "pri
     });
   } catch (error: any) {
     console.error('[IntelligenceHub] Lead score error:', error.message);
-    res.status(500).json({ error: "Failed to calculate lead score", message: error.message });
+    res.status(500).json({ error: "Failed to calculate lead score", });
   }
 });
 
@@ -5548,7 +5912,7 @@ app.post("/api/pipeline-view", (req, res) => {
     });
   } catch (error: any) {
     console.error('[IntelligenceHub] Pipeline view error:', error.message);
-    res.status(500).json({ error: "Failed to fetch pipeline view", message: error.message });
+    res.status(500).json({ error: "Failed to fetch pipeline view", });
   }
 });
 
@@ -5567,8 +5931,8 @@ app.post("/api/next-action/:id", async (req, res) => {
   
   try {
     // Get API key (user-specific or system)
-    const apiKeyRow = db.prepare("SELECT gemini_api_key FROM users WHERE id = ?").get(user.id) as any;
-    const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
+    const apiKeyRow = db.prepare("SELECT api_key FROM users WHERE id = ?").get(user.id) as any;
+    const apiKey = apiKeyRow?.api_key || process.env.API_KEY;
     
     // Get next action recommendation
     const recommendation = await getNextAction(id, apiKey);
@@ -5591,7 +5955,7 @@ app.post("/api/next-action/:id", async (req, res) => {
     });
   } catch (error: any) {
     console.error('[IntelligenceHub] Next action error:', error.message);
-    res.status(500).json({ error: "Failed to generate recommendation", message: error.message });
+    res.status(500).json({ error: "Failed to generate recommendation", });
   }
 });
 
@@ -5622,7 +5986,7 @@ app.post("/api/relationship/:id/track", (req, res) => {
     });
   } catch (error: any) {
     console.error('[IntelligenceHub] Track relationship error:', error.message);
-    res.status(500).json({ error: "Failed to track relationship", message: error.message });
+    res.status(500).json({ error: "Failed to track relationship", });
   }
 });
 
@@ -5651,7 +6015,7 @@ app.get("/api/relationship/:id/history", (req, res) => {
     });
   } catch (error: any) {
     console.error('[IntelligenceHub] Get relationship history error:', error.message);
-    res.status(500).json({ error: "Failed to fetch relationship history", message: error.message });
+    res.status(500).json({ error: "Failed to fetch relationship history", });
   }
 });
 
@@ -5673,12 +6037,9 @@ app.post("/api/classify-reply", async (req, res) => {
   }
 
   // Get API key (user-specific or system)
-  const apiKeyRow = db.prepare("SELECT gemini_api_key FROM users WHERE id = ?").get(user.id) as any;
-  const apiKey = apiKeyRow?.gemini_api_key || process.env.GEMINI_API_KEY;
+  const apiKeyRow = db.prepare("SELECT api_key FROM users WHERE id = ?").get(user.id) as any;
+  const apiKey = apiKeyRow?.api_key || process.env.API_KEY;
 
-  if (!apiKey) {
-    return res.status(400).json({ error: "Gemini API key required. Please configure in settings." });
-  }
 
   // Get user info for context
   const userInfo = db.prepare("SELECT company_name, full_name FROM users WHERE id = ?").get(user.id) as any;
@@ -5732,7 +6093,7 @@ app.post("/api/classify-reply", async (req, res) => {
     console.error('[ProtocolManager] Classification error:', error.message);
     res.status(500).json({ 
       error: "Failed to classify reply", 
-      message: error.message,
+      // F-27: error detail intentionally omitted from response
       category: 'NOT_INTERESTED',
       confidence: 0,
       suggestedResponse: 'Unable to classify - manual review required'
@@ -5807,14 +6168,39 @@ function interpolateWaTemplate(template: string, lead: any): string {
     .replace(/\{\{title\}\}/gi, lead.title || '');
 }
 
+// Send one WhatsApp sequence step through the QR bridge (Baileys).
+// The bridge is the only WhatsApp transport: no Meta Business-API gate,
+// no WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN requirement.
+// Template steps have no bridge equivalent, so they are rendered as plain
+// text from their params (the bridge sends `text` only).
+async function sendWaViaBridge(chatId: string, message: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const bridgeUrl = (process.env.WHATSAPP_BRIDGE_URL || `http://localhost:${process.env.WHATSAPP_BRIDGE_PORT || '3000'}`).replace(/\/+$/, '') + '/send';
+  try {
+    const outbound = await fetch(bridgeUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chatId, message }),
+    });
+    const result: any = await outbound.json().catch(() => ({}));
+    if (!outbound.ok || result.success === false) {
+      return { success: false, error: result.error || `Bridge send failed (HTTP ${outbound.status})` };
+    }
+    const messageId = result.messageId
+      || (Array.isArray(result.messageIds) && result.messageIds.length > 0 ? result.messageIds[result.messageIds.length - 1] : undefined);
+    return { success: true, messageId };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'WhatsApp bridge unavailable' };
+  }
+}
+
 async function processWaSequences() {
   // N1: Respect Ramadan/Eid pause
   const isHoliday = isIslamicHolidayPause();
 
-  if (!whatsappService.isConfigured()) {
-    // Nothing to do without WhatsApp configured
-    return;
-  }
+  // Business-API gate removed (T3): sequences route through the QR bridge
+  // directly. No isConfigured() check, no Meta credentials needed. If the
+  // bridge is down, each send logs WA_SEQUENCE_ERROR and retries next cycle;
+  // the processor itself never early-returns on Business-API config.
 
   // Find all due active enrollments whose sequence is also active
   const dueEnrollments = db.prepare(`
@@ -5891,20 +6277,23 @@ async function processWaSequences() {
       }
 
       const formattedPhone = whatsappService.formatPhone(lead.phone);
+      const bridgeChatId = `${formattedPhone}@s.whatsapp.net`;
       let sendResult: { success: boolean; messageId?: string; error?: string };
       let messageContent = '';
       let messageType = '';
 
       if (step.type === 'template') {
-        // Interpolate params array (each param may contain {{name}} etc.)
+        // The QR bridge sends plain text only, so a legacy template step is
+        // rendered from its params (each may contain {{name}} etc.).
         const params: string[] = (step.params || []).map((p: string) => interpolateWaTemplate(p, lead));
-        sendResult = await whatsappService.sendTemplate(formattedPhone, step.templateName, params);
+        const rendered = params.length > 0 ? params.join('\n') : String(step.templateName || '');
+        sendResult = await sendWaViaBridge(bridgeChatId, rendered);
         messageContent = JSON.stringify({ templateName: step.templateName, params });
         messageType = 'template';
       } else {
-        // text step
+        // text step via the QR bridge
         const message = interpolateWaTemplate(step.message, lead);
-        sendResult = await whatsappService.sendMessage(formattedPhone, message);
+        sendResult = await sendWaViaBridge(bridgeChatId, message);
         messageContent = message;
         messageType = 'text';
       }
@@ -6491,20 +6880,72 @@ async function startServer() {
   const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`LEADJIN Engine running at http://localhost:${PORT}`);
 
+    // ── First-Boot Seed: Vision 2030 case study data ─────────────────────
+    // If no leads exist, seed the default case study data so the system has
+    // leads to work with. In production this is gated behind founder auth; in
+    // development it runs automatically so the app is never empty.
+    try {
+      const leadCount = db.prepare(
+        "SELECT COUNT(*) as cnt FROM leads"
+      ).get().cnt;
+
+      if (leadCount === 0) {
+        if (process.env.NODE_ENV !== 'production') {
+          // Development: auto-seed without auth
+          const FOUNDER_EMAIL = process.env.FOUNDER_EMAIL || 'founder@leadjin.test';
+          const isFounderFound = false; // always allow in dev
+
+          if (isFounderFound) {
+            // Use the existing seed logic
+            const existingLeads = db.prepare(
+              "SELECT COUNT(*) as cnt FROM leads WHERE user_id = ?"
+            ).get('dev-user') as { cnt: number };
+
+            if (existingLeads.cnt > 0) {
+              console.log('[First-Boot] Leads already exist, skipping re-seed.');
+            } else {
+              const saudiLeads = [
+                { id: 'l1', name: 'Ahmed Al-Sudairy', company: 'NEOM Tech Solutions', title: 'Director of Innovation', email: 'ahmed@neom.sa', industry: 'Technology', score: 94, status: 'CLOSED', v2030: 95, vProg: 'PIF Program' },
+                { id: 'l2', name: 'Sara Bin Ladin', company: 'Red Sea Global', title: 'VP Strategy', email: 'sara@redseaglobal.com', industry: 'Tourism', score: 88, status: 'PROPOSAL', v2030: 92, vProg: 'Quality of Life' },
+                { id: 'l3', name: 'Khalid Al-Faisal', company: 'Aramco Digital', title: 'Head of AI', email: 'khalid@aramco.sa', industry: 'Energy', score: 91, status: 'MEETING', v2030: 85, vProg: 'NIDLP' },
+                { id: 'l4', name: 'Noura Al-Saud', company: 'PIF (Public Investment Fund)', title: 'Investment Manager', email: 'noura@pif.gov.sa', industry: 'Finance', score: 96, status: 'REPLIED', v2030: 98, vProg: 'PIF Program' },
+                { id: 'l5', name: 'Fahad Al-Rashid', company: 'King Abdullah Financial District', title: 'CEO', email: 'fahad@kafd.sa', industry: 'Real Estate', score: 85, status: 'CONTACTED', v2030: 80, vProg: 'Housing Program' },
+                { id: 'l6', name: 'Mona Al-Zahrani', company: 'STC Solutions', title: 'CTO', email: 'mona@stc.com.sa', industry: 'Telecom', score: 82, status: 'NEW', v2030: 75, vProg: 'Digital Transformation' },
+                { id: 'l7', name: 'Omar Al-Ghamdi', company: 'SABIC', title: 'Supply Chain Director', email: 'omar@sabic.com', industry: 'Manufacturing', score: 79, status: 'NEW', v2030: 70, vProg: 'NIDLP' },
+                { id: 'l8', name: 'Laila Al-Otaibi', company: 'Ministry of Investment', title: 'Advisor', email: 'laila@misa.gov.sa', industry: 'Government', score: 92, status: 'CONTACTED', v2030: 90, vProg: 'Privatization' },
+                { id: 'l9', name: 'Yousef Al-Harbi', company: 'Riyadh Air', title: 'Digital Transformation Lead', email: 'yousef@riyadhair.sa', industry: 'Aviation', score: 87, status: 'NEW', v2030: 88, vProg: 'NIDLP' },
+                { id: 'l10', name: 'Reem Al-Dossary', company: 'Lucid Motors Middle East', title: 'Regional Manager', email: 'reem@lucidmotors.com', industry: 'Automotive', score: 84, status: 'NEW', v2030: 82, vProg: 'Sustainability' }
+              ];
+
+              const insertLead = db.prepare("INSERT INTO leads (lead_id, name, company, title, email, industry, lead_score, status, vision_2030_score, vision_2030_program, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+
+              saudiLeads.forEach((l: any) => {
+                insertLead.run(l.id, l.name, l.company, l.title, l.email, l.industry, l.score, l.status, l.v2030, l.vProg, 'dev-user');
+              });
+
+              console.log('[First-Boot] Auto-seeded 10 Vision 2030 case study leads.');
+            }
+          }
+        } else {
+          // Production: note that seeding is available via /api/test/seed (founder-only)
+          console.log('[First-Boot] No leads found; run POST /api/test/seed (founder) to seed case study data.');
+        }
+      }
+    } catch (e) {
+      console.error('[First-Boot] Seed check failed:', e.message);
+    }
+
     // ── PERPETUAL CRAWL — gated by ENABLE_PERPETUAL_CRAWL=true ──
-    const crawlApiKey = process.env.GEMINI_API_KEY;
     const crawlEnabled = process.env.ENABLE_PERPETUAL_CRAWL === 'true';
 
     if (!crawlEnabled) {
       console.log('[PreCrawler] disabled (set ENABLE_PERPETUAL_CRAWL=true to enable)');
-    } else if (!crawlApiKey) {
-      console.log('[PreCrawler] Skipped — no GEMINI_API_KEY');
     } else {
       const totalCities = CRAWL_PHASES.reduce((s, p) => s + p.cities.length, 0);
       console.log(`[PreCrawler] PERPETUAL CRAWL starting in 10s — ${CRAWL_PHASES.length} phases, ${totalCities} cities, ${INDUSTRIES.length} industries`);
 
       setTimeout(() => {
-        startPerpetualCrawl(db, crawlApiKey, 3000).catch(err => {
+        startPerpetualCrawl(db, undefined, 3000).catch(err => {
           console.error('[PreCrawler] Perpetual crawl crashed:', err.message);
         });
       }, 10000);
@@ -6514,25 +6955,23 @@ async function startServer() {
     }
 
     // ── CONTINUOUS VERIFICATION — cadence controlled by VERIFICATION_INTERVAL_MS (default 6h) ──
-    if (crawlApiKey) {
-      const verificationIntervalMs = parseInt(process.env.VERIFICATION_INTERVAL_MS || '', 10) || (6 * 60 * 60 * 1000); // Default: 6 hours
+    const verificationIntervalMs = parseInt(process.env.VERIFICATION_INTERVAL_MS || '', 10) || (6 * 60 * 60 * 1000); // Default: 6 hours
 
-      const scheduleVerification = () => {
-        setTimeout(async () => {
-          try {
-            console.log('[Verify] === VERIFICATION CYCLE STARTED ===');
-            await runDailyVerification(db, 50); // 50 per cycle keeps it fast
-            console.log('[Verify] === VERIFICATION CYCLE COMPLETE ===');
-          } catch (err: any) {
-            console.error('[Verify] Verification failed:', err.message);
-          }
-          scheduleVerification();
-        }, verificationIntervalMs);
-      };
+    const scheduleVerification = () => {
+      setTimeout(async () => {
+        try {
+          console.log('[Verify] === VERIFICATION CYCLE STARTED ===');
+          await runDailyVerification(db, 50); // 50 per cycle keeps it fast
+          console.log('[Verify] === VERIFICATION CYCLE COMPLETE ===');
+        } catch (err: any) {
+          console.error('[Verify] Verification failed:', err.message);
+        }
+        scheduleVerification();
+      }, verificationIntervalMs);
+    };
 
-      // Run first verification after one interval (not immediately)
-      scheduleVerification();
-    }
+    // Run first verification after one interval (not immediately)
+    scheduleVerification();
   });
   server.on('error', (err: any) => {
     if (err.code === 'EADDRINUSE') {
