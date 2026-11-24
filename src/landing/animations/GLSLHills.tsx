@@ -189,7 +189,15 @@ export const GLSLHills: React.FC<GLSLHillsProps> = ({ darkMode, speed = 0.5 }) =
     const container = containerRef.current;
     if (!container) return;
 
-    const renderer = new THREE.WebGLRenderer({ canvas: canvasRef.current, antialias: false, alpha: true });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas: canvasRef.current, antialias: false, alpha: true });
+    } catch (err) {
+      // No WebGL context (blocked GPU / headless). The hills are ambient
+      // decoration: leave the canvas in place and skip all GL work so nothing
+      // throws into the app-wide ErrorBoundary.
+      return;
+    }
     const scene = new THREE.Scene();
     const w = container.clientWidth || window.innerWidth;
     const h = container.clientHeight || window.innerHeight;
@@ -203,13 +211,22 @@ export const GLSLHills: React.FC<GLSLHillsProps> = ({ darkMode, speed = 0.5 }) =
       const ch = containerRef.current.clientHeight || window.innerHeight;
       camera.aspect = cw / ch;
       camera.updateProjectionMatrix();
-      renderer.setSize(cw, ch);
+      try {
+        renderer.setSize(cw, ch);
+      } catch (err) {
+        // Ignore resize after a WebGL context failure.
+      }
     };
 
     let animId: number;
     const renderLoop = () => {
       plane.render(clock.getDelta());
-      renderer.render(scene, camera);
+      try {
+        renderer.render(scene, camera);
+      } catch (err) {
+        // WebGL context failed or was lost mid-frame: stop the loop quietly.
+        return;
+      }
       animId = requestAnimationFrame(renderLoop);
     };
 
@@ -227,7 +244,11 @@ export const GLSLHills: React.FC<GLSLHillsProps> = ({ darkMode, speed = 0.5 }) =
     return () => {
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', resize);
-      renderer.dispose();
+      try {
+        renderer.dispose();
+      } catch (err) {
+        // Context may already be lost; disposal is best-effort.
+      }
     };
   }, [speed]);
 
