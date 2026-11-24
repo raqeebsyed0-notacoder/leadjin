@@ -98,10 +98,8 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
     setLoading(true);
     setError(null);
     try {
-      // Standard Bearer authorization header; scheme assembled from parts so
-      // the literal header value is not mistaken for a credential in source.
       const res = await fetch(BOARD_URL, {
-        headers: { Authorization: ['Bear', 'er'].join('') + ' ' + authToken },
+        headers: { Authorization: `Bearer ${authToken}` },
         signal,
       });
       if (!res.ok) {
