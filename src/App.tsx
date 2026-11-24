@@ -7,6 +7,7 @@ import React, { useState, useEffect, Suspense, lazy, useRef, useCallback } from 
 import AdminDashboard from './AdminDashboard';
 import { landingTranslations } from './landing/landingTranslations';
 import { JinEmployeeDashboard } from './components/JinEmployeeDashboard';
+import { JinWorkingPane } from './components/JinWorkingPane';
 // Task 2G: Lazy load LandingPage for performance
 const LandingPage = lazy(() => import('./landing/LandingPage').then(m => ({ default: m.LandingPage })));
 
@@ -2280,11 +2281,14 @@ function AppContent() {
 
       {/* Jin AI Employee Status */}
       {authToken && (
-        <JinEmployeeDashboard 
-          isOpen={showJinPanel}
-          onToggle={() => setShowJinPanel(!showJinPanel)}
-          authToken={authToken}
-        />
+        <>
+          <JinEmployeeDashboard
+            isOpen={showJinPanel}
+            onToggle={() => setShowJinPanel(!showJinPanel)}
+            authToken={authToken}
+          />
+          <JinWorkingPane authToken={authToken} language={language} />
+        </>
       )}
 
       {/* Trial Banner */}

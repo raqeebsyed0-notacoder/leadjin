@@ -28,6 +28,7 @@ import { initEnrichmentTables } from './src/services/enrichmentCache.js';
 import { whatsappService } from './src/services/whatsappService.js';
 import { intentSignalService } from './src/services/intentSignals.js';
 import { createCompleteJinRouter } from './src/services/jinCompleteRoutes.js';
+import { createJinHuntStreamRouter } from './src/services/jinHuntStream.js';
 import { createArtisanRouter } from './src/services/artisanRoutes.js';
 import { huntExecutives } from './src/services/linkedinHunter.js';
 import { fetchWathqLead } from './src/services/wathqService.js';
@@ -36,6 +37,7 @@ import { computeMeetingReady, MEETING_READY_THRESHOLD } from './src/services/mee
 import { seedCaseStudyLeads } from './src/services/firstBootSeed.js';
 import { tripleVerify } from './src/services/sovereignVerifier.js';
 import { createModelSettingsRouter } from './src/services/modelSettingsRoutes.js';
+import { createModelCatalogRouter } from './src/services/modelCatalogRoutes.js';
 import { craftOutreach, type LeadProfile, type OutreachContext } from './src/services/visionStrategist.js';
 import { ProtocolManager, type ClassifyOptions } from './src/services/protocolManager.js';
 import { 
@@ -1403,12 +1405,17 @@ const clearSessionCache = (token: string) => {
 
 // --- Jin AI Employee Routes (All Modules) ---
 app.use('/api/jin', createCompleteJinRouter(db, getUserFromTokenCached));
+// LeadJin live hunt stream (SSE) — mounted on the /api/jin router
+app.use('/api/jin', createJinHuntStreamRouter(db, getUserFromTokenCached));
 
 // --- LeadJin Artisan Routes (Modules 3-5) ---
 app.use('/api/artisan', createArtisanRouter(db, getUserFromTokenCached));
 
 // --- LeadJin Model Settings Router (settings + model selection) ---
 app.use('/api/settings', createModelSettingsRouter(db, getUserFromTokenCached));
+
+// --- LeadJin live provider catalogue (live models catalogue, settings surface) ---
+app.use('/api/settings', createModelCatalogRouter());
 
 // Shared admin guard helper - requires BOTH admin secret AND valid user session with is_admin flag
 const requireAdmin = (req: express.Request, res: express.Response): boolean => {
