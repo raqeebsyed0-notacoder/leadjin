@@ -1,12 +1,64 @@
 /**
  * Module 1: The Employee's Brain (Autonomous Reasoning)
  * 
- * Jin's decision-making engine powered by Gemini 2.5 Flash.
+ * Jin's decision-making engine, powered by the configured local model.
  * Handles autonomous reasoning about leads, timing, and strategic decisions.
  */
 
-import { GoogleGenAI } from '@google/genai';
-import { getGenAI } from './genaiClient.js';
+import { getGenAI, type GenAIClient } from './genaiClient.js';
+// ---------------------------------------------------------------------------
+// Prose hygiene (F-21..F-25): no raw model text, code fence or JSON document
+// reaches a user. cleanModelText returns display-safe prose; cleanJsonResponse
+// returns a parseable JSON document with chatter and fences removed.
+// ---------------------------------------------------------------------------
+
+function cleanModelText(text: string): string {
+  let t = String(text ?? '').trim();
+  t = t.replace(/```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)```/g, (_all, inner: string) => {
+    const body = inner.trim();
+    return /^[[{]/.test(body) ? '' : body;
+  });
+  t = t.replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '');
+  t = t.replace(/^(?:(?:sure|certainly|of course|here(?:'s| is)[^\n:]{0,40}:?|here you go)[,\s]*)+/i, '');
+  const trimmed = t.trim();
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try { JSON.parse(trimmed); return ''; } catch { /* not a JSON document */ }
+  }
+  // A short chatter prefix in front of a JSON blob is still not prose.
+  const jsonStart = trimmed.search(/[[{]/);
+  if (jsonStart > 0) {
+    const prefix = trimmed.slice(0, jsonStart).trim();
+    if (prefix.length <= 80 && !prefix.includes('\n')) {
+      try { JSON.parse(cleanJsonResponse(trimmed)); return ''; } catch { /* prose with an inline brace */ }
+    }
+  }
+  return t.trim();
+}
+
+function cleanTextFields<T>(value: T): T {
+  if (typeof value === 'string') return cleanModelText(value) as unknown as T;
+  if (Array.isArray(value)) return value.map((v) => cleanTextFields(v)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = cleanTextFields(v);
+    return out as T;
+  }
+  return value;
+}
+
+function cleanJsonResponse(text: string): string {
+  let t = String(text ?? '').trim();
+  t = t.replace(/```[a-zA-Z0-9_-]*\s*\n/g, '').replace(/```\s*$/g, '');
+  const start = t.search(/[[{]/);
+  if (start > 0) t = t.slice(start);
+  try { JSON.parse(t); return t; } catch { /* trim trailing chatter below */ }
+  const end = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
+  if (end >= 0 && end < t.length - 1) t = t.slice(0, end + 1);
+  return t;
+}
+
+
 
 export interface JinDecision {
   decision: 'proceed' | 'wait' | 'escalate' | 'decline';
@@ -39,7 +91,7 @@ export interface OutreachContext {
 }
 
 export class JinBrain {
-  private ai: GoogleGenAI;
+  private ai: GenAIClient;
   private apiKey: string;
 
   constructor(apiKey: string) {
@@ -85,14 +137,14 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'fast',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });
       
       const text = response.text || '';
-      const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
-      return JSON.parse(cleaned);
+      const cleaned = cleanJsonResponse(text).trim();
+      return cleanTextFields(JSON.parse(cleanJsonResponse(text)));
     } catch (error: any) {
       console.error('[JinBrain] Intent analysis failed:', error.message);
       return {
@@ -148,14 +200,14 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'fast',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });
       
       const text = response.text || '';
-      const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
-      return JSON.parse(cleaned);
+      const cleaned = cleanJsonResponse(text).trim();
+      return cleanTextFields(JSON.parse(cleanJsonResponse(text)));
     } catch (error: any) {
       console.error('[JinBrain] Timing analysis failed:', error.message);
       return {
@@ -197,7 +249,7 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'fast',
         contents: prompt,
         config: { 
           tools: [{ googleSearch: {} }],
@@ -206,8 +258,8 @@ Respond with JSON:
       });
       
       const text = response.text || '';
-      const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
-      return JSON.parse(cleaned);
+      const cleaned = cleanJsonResponse(text).trim();
+      return cleanTextFields(JSON.parse(cleanJsonResponse(text)));
     } catch (error: any) {
       console.error('[JinBrain] Vision 2030 analysis failed:', error.message);
       return {
@@ -252,14 +304,14 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-1.5-flash',
+        model: 'fast',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });
       
       const text = response.text || '';
-      const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
-      return JSON.parse(cleaned);
+      const cleaned = cleanJsonResponse(text).trim();
+      return cleanTextFields(JSON.parse(cleanJsonResponse(text)));
     } catch (error: any) {
       console.error('[JinBrain] Reply categorization failed:', error.message);
       return {
@@ -298,11 +350,11 @@ Log entry:`;
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-1.5-flash',
+        model: 'fast',
         contents: prompt
       });
       
-      return (response.text || 'Task completed.').trim();
+      return cleanModelText(response.text || 'Task completed.');
     } catch (error: any) {
       return `Completed ${action} for ${entity}: ${outcome}`;
     }

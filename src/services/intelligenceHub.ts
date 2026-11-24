@@ -5,11 +5,62 @@
  * - Hunter (Module 1) → Verifier (Module 2) → Writer (Module 3) → Reply Manager (Module 4) → CRM
  *
  * Provides unified lead scoring, pipeline management, relationship tracking,
- * and AI-powered next best action recommendations using Gemini 2.5 Flash.
+ * and AI-powered next best action recommendations using the configured local model.
  */
 
+// ---------------------------------------------------------------------------
+// Prose hygiene (F-21..F-25): no raw model text, code fence or JSON document
+// reaches a user. cleanModelText returns display-safe prose; cleanJsonResponse
+// returns a parseable JSON document with chatter and fences removed.
+// ---------------------------------------------------------------------------
+
+function cleanModelText(text: string): string {
+  let t = String(text ?? '').trim();
+  t = t.replace(/```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)```/g, (_all, inner: string) => {
+    const body = inner.trim();
+    return /^[[{]/.test(body) ? '' : body;
+  });
+  t = t.replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '');
+  t = t.replace(/^(?:(?:sure|certainly|of course|here(?:'s| is)[^\n:]{0,40}:?|here you go)[,\s]*)+/i, '');
+  const trimmed = t.trim();
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try { JSON.parse(trimmed); return ''; } catch { /* not a JSON document */ }
+  }
+  // A short chatter prefix in front of a JSON blob is still not prose.
+  const jsonStart = trimmed.search(/[[{]/);
+  if (jsonStart > 0) {
+    const prefix = trimmed.slice(0, jsonStart).trim();
+    if (prefix.length <= 80 && !prefix.includes('\n')) {
+      try { JSON.parse(cleanJsonResponse(trimmed)); return ''; } catch { /* prose with an inline brace */ }
+    }
+  }
+  return t.trim();
+}
+
+function cleanTextFields<T>(value: T): T {
+  if (typeof value === 'string') return cleanModelText(value) as unknown as T;
+  if (Array.isArray(value)) return value.map((v) => cleanTextFields(v)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = cleanTextFields(v);
+    return out as T;
+  }
+  return value;
+}
+
+function cleanJsonResponse(text: string): string {
+  let t = String(text ?? '').trim();
+  t = t.replace(/```[a-zA-Z0-9_-]*\s*\n/g, '').replace(/```\s*$/g, '');
+  const start = t.search(/[[{]/);
+  if (start > 0) t = t.slice(start);
+  try { JSON.parse(t); return t; } catch { /* trim trailing chatter below */ }
+  const end = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
+  if (end >= 0 && end < t.length - 1) t = t.slice(0, end + 1);
+  return t;
+}
 import type { Database } from 'better-sqlite3';
-import { GoogleGenAI } from '@google/genai';
+
 import { getGenAI } from './genaiClient.js';
 import type { HuntResult, ExecutiveProfile } from './linkedinHunter.js';
 import type { SovereignVerificationResult, LeadIdentity } from './sovereignVerifier.js';
@@ -726,7 +777,7 @@ export function getLeadScore(leadId: string): CompositeScore {
 }
 
 /**
- * Get AI-enhanced lead score using Gemini 2.5 Flash
+ * Get AI-enhanced lead score using the configured local model
  * Provides intelligent scoring with reasoning
  */
 export async function getLeadScoreAI(
@@ -741,7 +792,7 @@ export async function getLeadScoreAI(
     return {
       ...baseScore,
       aiReasoning: 'AI scoring unavailable - using algorithmic score',
-      recommendations: ['Add Gemini API key for AI-enhanced scoring'],
+      recommendations: ['Configure an AI provider for enhanced scoring'],
     };
   }
   
@@ -796,14 +847,14 @@ Respond with JSON:
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'fast',
       contents: prompt,
       config: { responseMimeType: 'application/json' }
     });
     
     const text = response.text || '';
-    const cleaned = text.replace(/\`\`\`json\n?|\n?\`\`\`/g, '').trim();
-    const result = JSON.parse(cleaned);
+    const cleaned = cleanJsonResponse(text).trim();
+    const result = cleanTextFields(JSON.parse(cleanJsonResponse(text)));
     
     // Blend AI confidence with base score (70% base, 30% AI)
     const aiConfidence = result.aiConfidence || baseScore.overall;
@@ -856,7 +907,7 @@ export function getTopScoredLeads(userId?: number, limit: number = 20): Array<Le
 // ---------------------------------------------------------------------------
 
 /**
- * Get next best action recommendation using Gemini 2.5 Flash
+ * Get next best action recommendation using the configured local model
  * Analyzes lead state, history, and engagement to suggest optimal next step
  */
 export async function getNextAction(
@@ -946,14 +997,14 @@ Respond with JSON:
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'pro',
       contents: prompt,
       config: { responseMimeType: 'application/json' }
     });
     
     const text = response.text || '';
-    const cleaned = text.replace(/\`\`\`json\n?|\n?\`\`\`/g, '').trim();
-    const result = JSON.parse(cleaned);
+    const cleaned = cleanJsonResponse(text).trim();
+    const result = cleanTextFields(JSON.parse(cleanJsonResponse(text)));
     
     return {
       action: result.action || 'send_email',

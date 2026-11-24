@@ -2,11 +2,63 @@
  * Module 3: Vision Strategist (Hyper-Personalization Writer)
  * 
  * Generates personalized outreach emails that align leads with Saudi Vision 2030.
- * Uses Gemini 2.5 Flash for fast, contextual analysis and email generation.
+ * Uses the configured local model for fast, contextual analysis and drafting.
  */
 
-import { GoogleGenAI } from '@google/genai';
-import { getGenAI } from './genaiClient.js';
+import { getGenAI, type GenAIClient } from './genaiClient.js';
+
+// ---------------------------------------------------------------------------
+// Prose hygiene (F-21..F-25): no raw model text, code fence or JSON document
+// reaches a user. cleanModelText returns display-safe prose; cleanJsonResponse
+// returns a parseable JSON document with chatter and fences removed.
+// ---------------------------------------------------------------------------
+
+function cleanModelText(text: string): string {
+  let t = String(text ?? '').trim();
+  t = t.replace(/```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)```/g, (_all, inner: string) => {
+    const body = inner.trim();
+    return /^[[{]/.test(body) ? '' : body;
+  });
+  t = t.replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '');
+  t = t.replace(/^(?:(?:sure|certainly|of course|here(?:'s| is)[^\n:]{0,40}:?|here you go)[,\s]*)+/i, '');
+  const trimmed = t.trim();
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try { JSON.parse(trimmed); return ''; } catch { /* not a JSON document */ }
+  }
+  // A short chatter prefix in front of a JSON blob is still not prose.
+  const jsonStart = trimmed.search(/[[{]/);
+  if (jsonStart > 0) {
+    const prefix = trimmed.slice(0, jsonStart).trim();
+    if (prefix.length <= 80 && !prefix.includes('\n')) {
+      try { JSON.parse(cleanJsonResponse(trimmed)); return ''; } catch { /* prose with an inline brace */ }
+    }
+  }
+  return t.trim();
+}
+
+function cleanTextFields<T>(value: T): T {
+  if (typeof value === 'string') return cleanModelText(value) as unknown as T;
+  if (Array.isArray(value)) return value.map((v) => cleanTextFields(v)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = cleanTextFields(v);
+    return out as T;
+  }
+  return value;
+}
+
+function cleanJsonResponse(text: string): string {
+  let t = String(text ?? '').trim();
+  t = t.replace(/```[a-zA-Z0-9_-]*\s*\n/g, '').replace(/```\s*$/g, '');
+  const start = t.search(/[[{]/);
+  if (start > 0) t = t.slice(start);
+  try { JSON.parse(t); return t; } catch { /* trim trailing chatter below */ }
+  const end = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
+  if (end >= 0 && end < t.length - 1) t = t.slice(0, end + 1);
+  return t;
+}
+
 
 export interface LeadProfile {
   name: string;
@@ -53,7 +105,7 @@ export const VISION_2030_PROGRAMS = {
 };
 
 export class VisionStrategist {
-  private ai: GoogleGenAI;
+  private ai: GenAIClient;
   private apiKey: string;
 
   constructor(apiKey: string) {
@@ -145,26 +197,13 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'pro',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });
 
       const text = response.text || '';
-      const cleaned = text.replace(/\`\`\`json\n?|\n?\`\`\`/g, '').trim();
-      const result = JSON.parse(cleaned);
-      
-      return {
-        subject: result.subject,
-        body: result.body,
-        personalizationScore: result.personalizationScore || 75,
-        references: result.references || [],
-        language: result.language || language,
-        toneAnalysis: result.toneAnalysis || {
-          formality: 'formal',
-          culturalAppropriateness: 'high'
-        }
-      };
+      return cleanTextFields(JSON.parse(cleanJsonResponse(text)));
     } catch (error: any) {
       console.error('[VisionStrategist] Outreach crafting failed:', error.message);
       
@@ -174,7 +213,7 @@ Respond with JSON:
         : `Partnership Opportunity - ${context.service}`;
       
       const fallbackBody = language === 'ar'
-        ? `السلام عليكم ورحمة الله وبركاته\n\nتحية طيبة ${lead.name}،\n\nنأمل أن تكون بصحة وعافية. نكتب إليكم بخصوص فرصة تعاون محتملة بين ${context.senderCompany || 'شركتنا'} و${lead.company}.\n\nنحن نقدر جهود ${lead.company} في دعم رؤية المملكة 2030، ونرى فرصة للتعاون في مجال ${context.service}.\n\nنتطلع لفرصة التواصل معكم لمناقشة كيف يمكننا العمل معاً لتحقيق أهدافنا المشتركة.\n\nوتفضلوا بقبول فائق الاحترام والتقدير،\n${context.senderName || ''}\n${context.senderCompany || ''}`
+        ? `السلام عليكم ورحمة الله وبركاته\n\nتحية طيبة ${lead.name}،\n\nنأمل أن تكون بصحة وعافية. نكتب إليكم بخصوص فرصة تعاون محتملة بين ${context.senderCompany || 'شركتنا'} و${lead.company}.\n\nنقدر جهود ${lead.company} في دعم رؤية المملكة 2030، ونرى فرصة للتعاون في مجال ${context.service}.\n\nنتطلع لفرصة التواصل معكم لمناقشة كيف يمكننا العمل معاً لتحقيق أهدافنا المشتركة.\n\nوتفضلوا بقبول فائق الاحترام والتقدير،\n${context.senderName || ''}\n${context.senderCompany || ''}`
         : `As-salamu alaykum,\n\nI hope this message finds you well.\n\nDear ${lead.name},\n\nI am writing to explore a potential collaboration opportunity between ${context.senderCompany || 'our company'} and ${lead.company}.\n\nWe appreciate ${lead.company}'s contributions toward Saudi Vision 2030, and we see potential for synergies in the area of ${context.service}.\n\nWe would welcome the opportunity to connect with you to discuss how we might work together toward our shared goals.\n\nWa assalamu alaykum,\n${context.senderName || ''}\n${context.senderCompany || ''}`;
       
       return {
@@ -245,14 +284,13 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'pro',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });
 
       const text = response.text || '';
-      const cleaned = text.replace(/\`\`\`json\n?|\n?\`\`\`/g, '').trim();
-      return JSON.parse(cleaned);
+      return cleanTextFields(JSON.parse(cleanJsonResponse(text)));
     } catch (error: any) {
       console.error('[VisionStrategist] Vision alignment analysis failed:', error.message);
       return {
@@ -269,15 +307,11 @@ Respond with JSON:
 let strategistInstance: VisionStrategist | null = null;
 
 export function getVisionStrategist(apiKey?: string): VisionStrategist {
-  const key = apiKey || process.env.GEMINI_API_KEY;
-  if (!key) {
-    throw new Error('GEMINI_API_KEY is required for VisionStrategist');
-  }
-  
+  const key = apiKey || 'default-key';
   if (!strategistInstance || (apiKey && apiKey !== strategistInstance['apiKey'])) {
     strategistInstance = new VisionStrategist(key);
   }
-  
+
   return strategistInstance;
 }
 
