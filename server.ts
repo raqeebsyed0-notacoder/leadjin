@@ -20,7 +20,7 @@ import cors from "cors";
 import dns from 'dns/promises';
 import net from 'net';
 import { generateLeadjinLeads } from "./src/services/leadService.js";
-import { getGenAI } from "./src/services/genaiClient.js";
+import { getGenAI, resolveModel, LEADJIN_PROVIDER } from "./src/services/genaiClient.js";
 import { waterfallEnrichment } from './src/services/waterfallEnrichment.js';
 import { enrichLead, enqueueEnrichment, enrichBatch, getQueueItem, getEnrichmentStats, type EnrichmentInput, setDatabase } from './src/services/enrichmentEngine.js';
 import { initPreCrawlTables, runPreCrawlBatch, getPreCrawlStats, lookupCompany, lookupPerson, searchPeople, startPerpetualCrawl, runDailyVerification, KSA_CITIES, INDUSTRIES, CRAWL_PHASES } from './src/services/preCrawler.js';
@@ -1408,7 +1408,7 @@ app.use('/api/jin', createCompleteJinRouter(db, getUserFromTokenCached));
 app.use('/api/artisan', createArtisanRouter(db, getUserFromTokenCached));
 
 // --- LeadJin Model Settings Router (settings + model selection) ---
-app.use('/api/settings', createModelSettingsRouter(db));
+app.use('/api/settings', createModelSettingsRouter(db, getUserFromTokenCached));
 
 // Shared admin guard helper - requires BOTH admin secret AND valid user session with is_admin flag
 const requireAdmin = (req: express.Request, res: express.Response): boolean => {
@@ -1608,17 +1608,22 @@ Search specifically:
 - site:linkedin.com "${lead.name}" "${lead.company}"
 - "${lead.name}" email @${lead.website ? new URL(lead.website.startsWith('http') ? lead.website : 'https://' + lead.website).hostname.replace('www.', '') : lead.company.toLowerCase().replace(/\s+/g, '') + '.com'}
 
-Return ONLY the email address found. If multiple found, return the one most likely to be this specific person. If absolutely nothing found, return NULL.`;
+Return ONLY the email address found. If multiple found, return the one most likely to be this specific person. If absolutely nothing found, return NULL.
+You have NO live web access in this environment — do not claim to have searched. Return NULL unless you already know the answer with confidence.`;
+    // F-20: resolve the model here through genaiClient instead of the dead
+    // "flash-lite" literal. F-28: googleSearch grounding is NOT available on
+    // the local Ollama path (callOllama never serialises config.tools), so no
+    // tools config is passed; the prompt and source marker make that explicit.
     const searchRes = await ai.models.generateContent({
-      model: "flash-lite",
+      model: resolveModel(LEADJIN_PROVIDER),
       contents: searchPrompt,
-      config: { tools: [{ googleSearch: {} }] },
     });
     const raw = (searchRes.text || '').trim();
     const emailMatch = raw.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
     if (emailMatch && !raw.toUpperCase().includes('NULL')) {
-      // Task 1B: Google search is NOT verified - only web_scrape and smtp_verified are verified
-      return { email: emailMatch[0], verified: false, source: 'google_search' };
+      // Task 1B: ungrounded model output is NOT verified — no live Google Search
+      // exists on this host (F-28). Only web_scrape / smtp_verified are verified.
+      return { email: emailMatch[0], verified: false, source: 'google_search_ungrounded' };
     }
   } catch (e: any) {
     console.warn('[Enrichment] Gemini search failed:', e.message);
@@ -1636,11 +1641,12 @@ Return ONLY the email address found. If multiple found, return the one most like
   if (!domain && lead.company) {
     try {
       const ai = getGenAI(apiKey);
-      const domainPrompt = `What is the official website domain for "${lead.company}"? Return ONLY the domain name (e.g., "aramco.com" for Saudi Aramco), nothing else. If unknown, return NULL.`;
+      const domainPrompt = `What is the official website domain for "${lead.company}"? Return ONLY the domain name (e.g., "aramco.com" for Saudi Aramco), nothing else. If unknown, return NULL. You have NO live web access here — treat this as a best-effort guess, not a grounded lookup.`;
+      // F-20: resolved through genaiClient (no dead literal). F-28: no
+      // googleSearch tools config passed — grounding is unavailable on Ollama.
       const domainRes = await ai.models.generateContent({
-        model: "flash-lite",
+        model: resolveModel(LEADJIN_PROVIDER),
         contents: domainPrompt,
-        config: { tools: [{ googleSearch: {} }] },
       });
       const domainText = (domainRes.text || '').trim().toLowerCase();
       // Extract domain from various formats (example.com, https://example.com, www.example.com)
@@ -1679,7 +1685,11 @@ Return ONLY the email address found. If multiple found, return the one most like
         if (!pRes.ok) continue;
         const html = await pRes.text();
         const emailRegex = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
-        const found = (html.match(emailRegex) || []).filter(e =>
+        // Pin the regex-match array to string[] so the filter element type is
+        // string (otherwise `html.match(...) || []` can infer a never element
+        // and .includes/.length fail to resolve).
+        const matches: string[] = html.match(emailRegex) || [];
+        const found = matches.filter(e =>
           !e.includes('noreply') && !e.includes('no-reply') &&
           !e.includes('example') && !e.includes('sentry') &&
           !e.includes('wixpress') && !e.includes('@2x') &&
@@ -1854,16 +1864,16 @@ async function discoverLinkedIn(name: string, company: string, apiKey: string): 
 Search query: site:linkedin.com/in "${name}" "${company}"
 
 Return ONLY the LinkedIn profile URL if found. The URL must start with https://linkedin.com/in/ or https://www.linkedin.com/in/
-If no LinkedIn profile found, return NULL.`;
+If no LinkedIn profile found, return NULL. You have NO live web access here — return NULL rather than inventing a URL.`;
 
-    // NOTE: Google Search grounding (config.tools) is dropped by the local
-    // Ollama provider (callOllama never serialises config.tools), so the model
-    // has no live search here. The URL this route returns is unverified —
-    // callers must treat it as a best-effort guess, not a grounded result.
+    // F-20: resolve the model here through genaiClient (no dead "flash-lite"
+    // literal). F-28: Google Search grounding is NOT available on the local
+    // Ollama path — callOllama never serialises config.tools, so no tools
+    // config is passed at all. The URL below is an UNGROUNDED best-effort
+    // guess, never a live-search result; callers must treat it as unverified.
     const searchRes = await ai.models.generateContent({
-      model: "flash-lite",
+      model: resolveModel(LEADJIN_PROVIDER),
       contents: searchPrompt,
-      config: { tools: [{ googleSearch: {} }] },
     });
     
     const raw = (searchRes.text || '').trim();

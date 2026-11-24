@@ -201,7 +201,10 @@ const PROVIDER_TOGETHER = 'together';
 const PROVIDER_NVIDIA = 'nvidia';
 const PROVIDER_NOUS = 'nous';
 const PROVIDER_DEFAULT = PROVIDER_OLLAMA;
-const LEADJIN_PROVIDER = (process.env.LEADJIN_PROVIDER || PROVIDER_DEFAULT).toLowerCase();
+// Exported so call sites (e.g. server.ts enrichment helpers) can resolve a
+// concrete model id through resolveModel instead of hard-coding a dead vendor
+// literal such as "flash-lite".
+export const LEADJIN_PROVIDER = (process.env.LEADJIN_PROVIDER || PROVIDER_DEFAULT).toLowerCase();
 
 // ---------------------------------------------------------------------------
 // Monthly cap
@@ -497,6 +500,10 @@ function estimateCost(params: ChatParams): number {
 
 async function callOllama(params: ChatParams): Promise<{ text: string; model?: string }> {
   const url = `${OLLAMA_BASE}/api/chat`;
+  // F-28: local Ollama /api/chat has no Google Search grounding. config.tools
+  // is deliberately NOT serialised into the request body below — any
+  // { googleSearch: {} } tool a caller passes is unsupported on this path, not
+  // honoured. Callers must label such results ungrounded / best-effort.
   const body: Record<string, unknown> = {
     model: resolveModel(PROVIDER_OLLAMA, params.model),
     messages: buildMessages(params.contents),
@@ -577,13 +584,27 @@ function localFallbackResponse(params: ChatParams, error?: unknown): { text: str
   };
 }
 
+/** Result of a generateContent call.
+ *
+ *  `fallbackFrom` / `fallbackReason` are a caller-visible signal: they are set
+ *  when the configured provider leg was skipped (e.g. gateway key absent) and
+ *  a lower-priority leg served the request. Callers can surface or log this
+ *  instead of assuming the intended provider answered. */
+export interface GenAIResult {
+  text: string;
+  model?: string;
+  usage?: { promptTokens: number; completionTokens: number };
+  fallbackFrom?: string;
+  fallbackReason?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Public API — keeps the GoogleGenAI-shaped caller contract.
 // ---------------------------------------------------------------------------
 
 export interface GenAIClient {
   models: {
-    generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<{ text: string }>;
+    generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<GenAIResult>;
     generateContentStream(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<AsyncIterable<{ text: string; model?: string }>>;
   };
 }
@@ -698,7 +719,7 @@ export async function* generateContentStream(params: {
 
 export interface GenAIClient {
   models: {
-    generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<{ text: string }>;
+    generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<GenAIResult>;
     generateContentStream(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<AsyncIterable<{ text: string; model?: string }>>;
   };
 }
@@ -766,8 +787,10 @@ export function getGenAI(userApiKey?: string): GenAIClient {
     console.error(`[genaiClient] LEADJIN_PROVIDER=${provider} (byok) requires an API key, falling back to local ollama`);
     return {
       models: {
-        async generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<{ text: string }> {
-          return callOllama({ model: resolveModel(PROVIDER_OLLAMA, params.model), contents: params.contents, config: params.config });
+        async generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<GenAIResult> {
+          const result = await callOllama({ model: resolveModel(PROVIDER_OLLAMA, params.model), contents: params.contents, config: params.config });
+          // Caller-visible signal: the configured provider leg was skipped.
+          return { ...result, fallbackFrom: provider, fallbackReason: 'missing API key' };
         },
         async generateContentStream(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<AsyncIterable<{ text: string; model?: string }>> {
           return generateContentStream({ base: OLLAMA_BASE, chatPath: '/api/chat', model: resolveModel(PROVIDER_OLLAMA, params.model), apiKey: null, messages: buildMessages(params.contents), config: params.config });
@@ -781,8 +804,11 @@ export function getGenAI(userApiKey?: string): GenAIClient {
     console.error('[genaiClient] LEADJIN_PROVIDER=gateway requires API_SERVER_KEY, falling back to local ollama');
     return {
       models: {
-        async generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<{ text: string }> {
-          return callOllama({ model: resolveModel(PROVIDER_OLLAMA, params.model), contents: params.contents, config: params.config });
+        async generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<GenAIResult> {
+          const result = await callOllama({ model: resolveModel(PROVIDER_OLLAMA, params.model), contents: params.contents, config: params.config });
+          // Caller-visible signal: the gateway leg was skipped (no API_SERVER_KEY),
+          // so callers must not report this as a gateway-grounded answer.
+          return { ...result, fallbackFrom: PROVIDER_GATEWAY, fallbackReason: 'missing API_SERVER_KEY' };
         },
         async generateContentStream(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<AsyncIterable<{ text: string; model?: string }>> {
           return generateContentStream({ base: OLLAMA_BASE, chatPath: '/api/chat', model: resolveModel(PROVIDER_OLLAMA, params.model), apiKey: null, messages: buildMessages(params.contents), config: params.config });
@@ -793,7 +819,7 @@ export function getGenAI(userApiKey?: string): GenAIClient {
 
   return {
     models: {
-      async generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown>; context?: Record<string, unknown> }): Promise<{ text: string }> {
+      async generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown>; context?: Record<string, unknown> }): Promise<GenAIResult> {
         const resolvedModel = resolveModel(provider, params.model);
         const serialized = serializeContents(params.contents, params.context);
         const messages = buildMessages(serialized);
