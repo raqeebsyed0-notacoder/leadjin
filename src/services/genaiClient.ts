@@ -584,7 +584,7 @@ function localFallbackResponse(params: ChatParams, error?: unknown): { text: str
 export interface GenAIClient {
   models: {
     generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<{ text: string }>;
-    generateContentStream(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): AsyncIterable<{ text: string; model?: string }>;
+    generateContentStream(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<AsyncIterable<{ text: string; model?: string }>>;
   };
 }
 
@@ -699,7 +699,44 @@ export async function* generateContentStream(params: {
 export interface GenAIClient {
   models: {
     generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<{ text: string }>;
-    generateContentStream(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): AsyncIterable<{ text: string; model?: string }>;
+    generateContentStream(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<AsyncIterable<{ text: string; model?: string }>>;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Per-user AI preferences (BYOK). The read site in getGenAI was added by
+// be-services-2 but the helper itself went missing in a later merge — restored
+// here. Shape mirrors `ModelSettings` in modelSettingsRoutes.ts, which stores
+// users.preferences as JSON.
+// ---------------------------------------------------------------------------
+
+export interface UserAiPreferences {
+  mode: 'local' | 'byok';   // local → Ollama; byok → user key + provider
+  provider?: string;
+  apiKey?: string;          // decrypted by the host before setUserAiPreferences
+  updatedAt?: string;
+}
+
+let _userAiPreferences: UserAiPreferences | undefined;
+
+/** Host request layer publishes the signed-in user's preferences here.
+ *  Pass `undefined` at logout / between requests. The key is never logged. */
+export function setUserAiPreferences(prefs: UserAiPreferences | undefined): void {
+  _userAiPreferences = prefs;
+}
+
+/** Read the current user's AI preferences. Standalone scripts without a request
+ *  context can opt into BYOK via LEADJIN_AI_MODE=byok + LEADJIN_USER_API_KEY
+ *  (+ optional LEADJIN_AI_PROVIDER). Returns undefined otherwise, so getGenAI
+ *  keeps its historical behaviour of using the explicit userApiKey argument. */
+export function getUserAiPreferences(): UserAiPreferences | undefined {
+  if (_userAiPreferences) return _userAiPreferences;
+  if ((process.env.LEADJIN_AI_MODE || '').trim().toLowerCase() !== 'byok') return undefined;
+  const apiKey = (process.env.LEADJIN_USER_API_KEY || '').trim();
+  return {
+    mode: 'byok',
+    provider: (process.env.LEADJIN_AI_PROVIDER || '').trim() || undefined,
+    apiKey: apiKey || undefined,
   };
 }
 
@@ -710,6 +747,16 @@ class EmptyCompletionError extends Error {
 
 export function getGenAI(userApiKey?: string): GenAIClient {
   const provider = LEADJIN_PROVIDER;
+
+  // Map provider → { key getter, base, model, referer }. Restored from the
+  // pre-be-services state (backups-20261123-svc/genaiClient.ts:552).
+  const freeProviderConfig: Record<string, { keyFn: () => string; base: string; model: string; referer?: string } | null> = {
+    [PROVIDER_OPENROUTER]: { keyFn: getOpenRouterKey, base: OPENROUTER_BASE, model: OPENROUTER_MODEL, referer: OPENROUTER_REFERRER },
+    [PROVIDER_TOGETHER]:   { keyFn: getTogetherKey,   base: TOGETHER_BASE,   model: TOGETHER_MODEL },
+    [PROVIDER_NVIDIA]:     { keyFn: getNvidiaKey,     base: NVIDIA_BASE,     model: NVIDIA_MODEL },
+    [PROVIDER_NOUS]:       { keyFn: getNousKey,       base: NOUS_BASE,       model: NOUS_MODEL },
+  };
+
   const prefs = getUserAiPreferences();
   /** Per-user 'byok' preference: use the user's key and provider. */
   const prefsByOk = Boolean(prefs && prefs.mode === 'byok');
