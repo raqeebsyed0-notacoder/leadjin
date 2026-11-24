@@ -1475,6 +1475,53 @@ const clearSessionCache = (token: string) => {
   sessionCache.delete(token);
 };
 
+// --- LeadJin campaign board data (real lead rows only) ---
+// Auth matches the sibling /api/jin routers: resolve the session via
+// getUserFromTokenCached and 401 anonymous callers. Registered before the
+// router mounts below so this exact path is served here.
+app.get('/api/jin/board', (req, res) => {
+  const user = getUserFromTokenCached(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required' });
+
+  // Real accounting only: costPerLead = users.enrichment_credits_used /
+  // COUNT(leads for the same user). One scalar, identical on every row.
+  // Null when the accounting row is missing or there are no leads (no /0).
+  const accounting = db.prepare('SELECT enrichment_credits_used FROM users WHERE id = ?').get(user.id) as any;
+  const countRow = db.prepare('SELECT COUNT(*) AS c FROM leads WHERE user_id = ?').get(user.id) as any;
+  const creditsUsed = typeof accounting?.enrichment_credits_used === 'number' ? accounting.enrichment_credits_used : null;
+  const leadCount = typeof countRow?.c === 'number' ? countRow.c : 0;
+  const costPerLead = creditsUsed !== null && leadCount > 0 ? creditsUsed / leadCount : null;
+
+  const leads = db.prepare(
+    'SELECT lead_id, company, industry, status, lead_score, vision_2030_score FROM leads WHERE user_id = ? ORDER BY created_at DESC'
+  ).all(user.id) as any[];
+
+  const rows = leads.map((lead) => {
+    // icpFit percentage formula:
+    //   icpFit = 0.6 * leads.vision_2030_score + 0.4 * leads.lead_score
+    // Both inputs are real 0-100 columns; the weights match the existing
+    // watan_score derivation in this server. If only one score is stored,
+    // that single real score is used; if neither is stored, icpFit is null.
+    const vision = typeof lead.vision_2030_score === 'number' ? lead.vision_2030_score : null;
+    const score = typeof lead.lead_score === 'number' ? lead.lead_score : null;
+    let icpFit: number | null = null;
+    if (vision !== null && score !== null) icpFit = Math.round((vision * 0.6 + score * 0.4) * 100) / 100;
+    else if (vision !== null) icpFit = vision;
+    else if (score !== null) icpFit = score;
+
+    return {
+      leadId: lead.lead_id,
+      company: lead.company ?? null,
+      industry: lead.industry ?? null,
+      status: lead.status ?? null,
+      icpFit,
+      costPerLead,
+    };
+  });
+
+  res.json({ leads: rows, leadCount: rows.length, costPerLead });
+});
+
 // --- Jin AI Employee Routes (All Modules) ---
 app.use('/api/jin', createCompleteJinRouter(db, getUserFromTokenCached));
 // LeadJin live hunt stream (SSE) — mounted on the /api/jin router
