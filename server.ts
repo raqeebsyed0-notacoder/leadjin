@@ -40,6 +40,8 @@ import { createModelSettingsRouter } from './src/services/modelSettingsRoutes.js
 import { createModelCatalogRouter } from './src/services/modelCatalogRoutes.js';
 import { craftOutreach, type LeadProfile, type OutreachContext } from './src/services/visionStrategist.js';
 import { ProtocolManager, type ClassifyOptions } from './src/services/protocolManager.js';
+import { verifyEmailSMTP, verifyPhoneHLR, verifyRegionalHQ } from './src/services/jinHandsVerifier.js';
+import { getHuntBus } from './src/services/jinHuntStream.js';
 import { 
   initIntelligenceSchema, 
   setIntelligenceDatabase,
@@ -469,6 +471,76 @@ app.get('/api/service/jin/ping', requireServiceScope('jin:drive'), (req, res) =>
     scopes: (req as any).service?.scopes,
     timestamp: new Date().toISOString(),
   });
+});
+
+// --- Jin fixed action routes (handles pushed through the app API) ---
+// Each is gated by requireServiceScope('jin:drive') and delegates to the
+// existing jin services where they exist.
+// Fixed action set: hunt.start, hunt.status, lead.verify
+
+// Start a new hunt (sector/geo discovery + assembly) via the existing
+// huntOrchestrator service.
+app.post('/api/service/jin/hunt.start', requireServiceScope('jin:drive'), async (req, res) => {
+  const { sector, geo, count } = req.body || {};
+  if (!sector || !geo) return res.status(400).json({ error: 'sector and geo are required' });
+  try {
+    const result = await huntOrchestrate(
+      { sector: String(sector).trim(), geo: String(geo).trim(), count: typeof count === 'number' ? count : 3 },
+      { fetchWathqLead, enrichContact: (await import('./src/services/contactEnrichment.js')).enrichContact, db },
+    );
+    res.json({ success: true, result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Hunt start failed' });
+  }
+});
+
+// Live hunt status via the shared in-process hunt bus
+// (exported from jinHuntStream.ts).
+app.get('/api/service/jin/hunt.status', requireServiceScope('jin:drive'), async (req, res) => {
+  const bus = getHuntBus();
+  let started = 0;
+  let done = 0;
+  let errored = 0;
+  let currentRunId: string | null = null;
+  let eventCount = 0;
+  for await (const event of bus) {
+    if (eventCount >= 128) break;
+    eventCount++;
+    if (event.kind === 'start') { started++; currentRunId = event.runId; }
+    if (event.kind === 'done') { done++; }
+    if (event.kind === 'error') { errored++; }
+  }
+  res.json({
+    status: 'ok',
+    runId: currentRunId,
+    started,
+    done,
+    errored,
+    eventCount,
+  });
+});
+
+// Verify a lead's contact channels via the existing jinHandsVerifier services.
+app.post('/api/service/jin/lead.verify', requireServiceScope('jin:drive'), async (req, res) => {
+  const { email, phone, domain, companyName, claimedLocation } = req.body || {};
+  if (!email && !phone && !domain) {
+    return res.status(400).json({ error: 'email, phone, or domain is required' });
+  }
+  try {
+    const results: Record<string, any> = {};
+    if (email) {
+      results.email = await verifyEmailSMTP(String(email), db);
+    }
+    if (phone) {
+      results.phone = await verifyPhoneHLR(String(phone), db);
+    }
+    if (domain && companyName) {
+      results.location = await verifyRegionalHQ(String(domain), String(companyName), String(claimedLocation || ''));
+    }
+    res.json({ success: true, results });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Lead verification failed' });
+  }
 });
 
 // --- Database Setup (CRM & Email Queue) ---
