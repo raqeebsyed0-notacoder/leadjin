@@ -8,6 +8,7 @@ import AdminDashboard from './AdminDashboard';
 import { landingTranslations } from './landing/landingTranslations';
 import { JinEmployeeDashboard } from './components/JinEmployeeDashboard';
 import { JinWorkingPane } from './components/JinWorkingPane';
+import { CampaignBoard } from './components/CampaignBoard';
 // Task 2G: Lazy load LandingPage for performance
 const LandingPage = lazy(() => import('./landing/LandingPage').then(m => ({ default: m.LandingPage })));
 
@@ -2288,6 +2289,7 @@ function AppContent() {
             authToken={authToken}
           />
           <JinWorkingPane authToken={authToken} language={language} />
+          <CampaignBoard authToken={authToken} />
         </>
       )}
 
