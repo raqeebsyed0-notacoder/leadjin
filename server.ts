@@ -240,19 +240,20 @@ app.use(helmet({
   },
   hsts: false, // No HSTS — app served over HTTP on LAN
 }));
+// CORS: explicit allowlist only — never reflect an arbitrary origin with credentials.
+// LEADJIN_WEB_ORIGINS is a comma-separated list of permitted web origins;
+// defaults to the production web app. The cors package (2.8.x) skips ALL CORS
+// headers when the origin callback returns false, so unknown origins get no
+// access-control-* headers at all, including no allow-credentials header.
+// Preflight (OPTIONS) for allowed origins is still handled by this middleware.
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile, curl) and any origin matching APP_URL host or localhost
-    if (!origin) return callback(null, true);
-    const allowed = process.env.APP_URL || 'http://localhost:3001';
-    const allowedUrl = new URL(allowed);
-    try {
-      const requestUrl = new URL(origin);
-      if (requestUrl.port === allowedUrl.port || origin === allowed) {
-        return callback(null, true);
-      }
-    } catch {}
-    return callback(null, true); // LAN deployment — reflect origin
+    const allowlist = (process.env.LEADJIN_WEB_ORIGINS || 'https://leadjin.euphoriaexperiences.com')
+      .split(',').map((o) => o.trim()).filter(Boolean);
+    // Requests with no Origin header are not cross-origin; emit no CORS headers.
+    if (!origin || !allowlist.includes(origin)) return callback(null, false);
+    // Echo exactly the allowlisted value — never an arbitrary reflected origin.
+    return callback(null, origin);
   },
   credentials: true
 }));
