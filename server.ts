@@ -6,7 +6,7 @@ process.on('unhandledRejection', (reason: any) => {
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
-import { readFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from "fs";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
@@ -66,6 +66,114 @@ dotenv.config();
 // --- FOUNDER MODE Configuration ---
 const FOUNDER_EMAIL = process.env.FOUNDER_EMAIL || '';
 const isFounder = (email: string) => FOUNDER_EMAIL ? email?.toLowerCase() === FOUNDER_EMAIL.toLowerCase() : false;
+
+// ── Observability: redacted structured JSON logs with size-based rotation ────
+// Every console call is mirrored as one JSON line. Founder email addresses and
+// raw Error objects are redacted before anything reaches stdout or the file.
+const LOG_FILE = process.env.LEADJIN_LOG_FILE
+  ? path.resolve(process.env.LEADJIN_LOG_FILE)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../logs/leadjin/server.jsonl');
+const LOG_MAX_BYTES = Math.max(1024 * 1024, parseInt(process.env.LEADJIN_LOG_MAX_BYTES || '', 10) || 10 * 1024 * 1024);
+const LOG_MAX_FILES = Math.max(1, parseInt(process.env.LEADJIN_LOG_MAX_FILES || '', 10) || 5);
+const FOUNDER_EMAIL_RE = FOUNDER_EMAIL
+  ? new RegExp(FOUNDER_EMAIL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+  : null;
+const SENSITIVE_KEY_RE = /^(password|passwd|secret|token|authorization|api[_-]?key|cookie|set-cookie)$/i;
+
+function redactLogValue(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+  if (value instanceof Error) return '[Error redacted]';
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'string') {
+    return FOUNDER_EMAIL_RE ? value.replace(FOUNDER_EMAIL_RE, '[redacted-founder-email]') : value;
+  }
+  if (value === null || typeof value !== 'object') return value;
+  if (Buffer.isBuffer(value)) return '[Buffer redacted]';
+  if (value instanceof Date) return value.toISOString();
+  if (depth > 4) return '[truncated]';
+  if (seen.has(value as object)) return '[circular]';
+  seen.add(value as object);
+  if (Array.isArray(value)) {
+    return value.slice(0, 50).map((v) => redactLogValue(v, depth + 1, seen));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(value as object)) {
+    out[key] = SENSITIVE_KEY_RE.test(key) ? '[redacted]' : redactLogValue(v, depth + 1, seen);
+  }
+  return out;
+}
+
+let logFileSize = 0;
+try {
+  mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+  logFileSize = statSync(LOG_FILE).size;
+} catch {
+  logFileSize = 0;
+}
+
+function rotateLogFile(): void {
+  for (let i = LOG_MAX_FILES - 1; i >= 1; i--) {
+    try {
+      if (existsSync(`${LOG_FILE}.${i}`)) renameSync(`${LOG_FILE}.${i}`, `${LOG_FILE}.${i + 1}`);
+    } catch { /* rotation is best-effort */ }
+  }
+  try { renameSync(LOG_FILE, `${LOG_FILE}.1`); } catch { /* no active file yet */ }
+  logFileSize = 0;
+}
+
+function structuredLog(level: string, args: unknown[]): unknown[] {
+  const safe = args.map((arg) => redactLogValue(arg));
+  try {
+    const message = safe.map((part) => {
+      if (typeof part === 'string') return part;
+      try { return JSON.stringify(part) ?? ''; } catch { return '[unserializable]'; }
+    }).join(' ');
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      level,
+      service: 'leadjin',
+      pid: process.pid,
+      message,
+    }) + '\n';
+    const bytes = Buffer.byteLength(line, 'utf8');
+    if (logFileSize + bytes > LOG_MAX_BYTES) rotateLogFile();
+    mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    appendFileSync(LOG_FILE, line, 'utf8');
+    logFileSize += bytes;
+  } catch {
+    // Logging must never take the service down.
+  }
+  return safe;
+}
+
+const nativeConsole = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+};
+console.log = (...args: unknown[]) => { nativeConsole.log(...structuredLog('info', args)); };
+console.info = (...args: unknown[]) => { nativeConsole.info(...structuredLog('info', args)); };
+console.warn = (...args: unknown[]) => { nativeConsole.warn(...structuredLog('warn', args)); };
+console.error = (...args: unknown[]) => { nativeConsole.error(...structuredLog('error', args)); };
+
+const APP_VERSION = (() => {
+  if (process.env.LEADJIN_VERSION) return process.env.LEADJIN_VERSION;
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+    return String(pkg.version || 'unknown');
+  } catch {
+    return 'unknown';
+  }
+})();
+
+// Constant-time comparison for the shared admin secret. Hashing first means a
+// same-length digest is compared regardless of the caller-supplied length.
+function safeSecretEqual(provided: unknown, expected: string): boolean {
+  if (typeof provided !== 'string' || !expected) return false;
+  const a = createHash('sha256').update(provided, 'utf8').digest();
+  const b = createHash('sha256').update(expected, 'utf8').digest();
+  return timingSafeEqual(a, b);
+}
 
 // --- Subscription Status Helper ---
 function getSubscriptionStatus(user: any): { status: 'trial' | 'trial_expired' | 'pro' | 'founder'; daysLeft: number; isActive: boolean } {
@@ -260,6 +368,29 @@ app.use(cors({
 
 app.use(express.json());
 
+// ── Global request timeout ────────────────────────────────────────────────────
+// Bounds every request. SSE streams are explicitly exempt because they are
+// designed to stay open; all other routes get a 504 if they exceed the cap.
+const REQUEST_TIMEOUT_MS = Math.max(1000, parseInt(process.env.LEADJIN_REQUEST_TIMEOUT_MS || '', 10) || 120000);
+app.use((req, res, next) => {
+  if (/\/api\/jin\/hunt\/stream/.test(req.path)) return next();
+  const timer = setTimeout(() => {
+    if (res.headersSent || res.writableEnded) {
+      (res as any).destroy?.();
+      return;
+    }
+    res.status(504).json({ error: 'request timeout', timeoutMs: REQUEST_TIMEOUT_MS });
+  }, REQUEST_TIMEOUT_MS);
+  const clearTimer = () => clearTimeout(timer);
+  res.once('finish', clearTimer);
+  res.once('close', clearTimer);
+  next();
+});
+
+// Fixed concurrency ceiling for the bulk-enrichment worker pool. Client input
+// is clamped; it can never create more workers than this cap.
+const BULK_ENRICH_MAX_CONCURRENCY = 5;
+
 // --- Rate Limiting for Auth Endpoints ---
 // Strict limiter for login/register/password reset only (not for /me or /google/*)
 const authLimiter = rateLimit({
@@ -277,7 +408,19 @@ app.use('/api/auth/forgot', authLimiter);
 app.use('/api/auth/reset', authLimiter);
 
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  const liveProvider = getLiveProviderInfo();
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime: Math.round(process.uptime()),       // seconds since process start
+    version: APP_VERSION,
+    provider: liveProvider.provider,
+    db: (() => {
+      if (!db) return "initializing";
+      try { db.prepare('SELECT 1').get(); return "connected"; }
+      catch { return "disconnected"; }
+    })(),
+  });
 });
 
 // ===========================================================================
@@ -432,7 +575,7 @@ function requireServiceScope(scope: string) {
 // ISSUE: caller proves it holds the app admin secret (Jin's service credential).
 app.post('/api/service-token/issue', (req, res) => {
   const secret = process.env.LEADJIN_ADMIN_SECRET;
-  if (!secret || req.headers['x-admin-secret'] !== secret) {
+  if (!secret || !safeSecretEqual(req.headers['x-admin-secret'], secret)) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const identity = (req.body?.identity || 'jin').toString().slice(0, 64) || 'jin';
@@ -1542,7 +1685,7 @@ app.use('/api/settings', createModelCatalogRouter());
 const requireAdmin = (req: express.Request, res: express.Response): boolean => {
   const adminSecret = process.env.LEADJIN_ADMIN_SECRET;
   if (!adminSecret) { res.status(503).json({ error: "admin access not configured — set LEADJIN_ADMIN_SECRET" }); return false; }
-  if (req.headers['x-admin-secret'] !== adminSecret) { res.status(403).json({ error: "forbidden" }); return false; }
+  if (!safeSecretEqual(req.headers['x-admin-secret'], adminSecret)) { res.status(403).json({ error: "forbidden" }); return false; }
   
   // Also require authenticated user with is_admin flag
   const user = getUserFromTokenCached(req);
@@ -2614,6 +2757,11 @@ app.post("/api/leads/enrich-bulk", async (req, res) => {
   if (!Array.isArray(leads) || leads.length === 0) {
     return res.status(400).json({ error: "leads array required" });
   }
+  // Clamp the worker pool to a fixed ceiling regardless of client input.
+  const requestedConcurrency = Number(concurrency);
+  const poolSize = Number.isFinite(requestedConcurrency) && requestedConcurrency > 0
+    ? Math.min(Math.floor(requestedConcurrency), BULK_ENRICH_MAX_CONCURRENCY)
+    : 3;
 
   const freshUser = db.prepare("SELECT email, is_founder FROM users WHERE id = ?").get(user.id) as any;
   const founderUser = freshUser?.is_founder || isFounder(freshUser?.email || '');
@@ -2627,7 +2775,7 @@ app.post("/api/leads/enrich-bulk", async (req, res) => {
   }
 
   try {
-    const batchResults = await waterfallEnrichment.enrichBatch(leads, concurrency);
+    const batchResults = await waterfallEnrichment.enrichBatch(leads, poolSize);
     let enriched = 0;
     let failed = 0;
     const results = batchResults.map((result, i) => {
@@ -2665,7 +2813,7 @@ app.post("/api/leads/enrich-bulk", async (req, res) => {
         };
       }
     });
-    res.json({ results, stats: { total: leads.length, enriched, failed } });
+    res.json({ results, stats: { total: leads.length, enriched, failed, concurrency: poolSize, maxConcurrency: BULK_ENRICH_MAX_CONCURRENCY } });
   } catch (err: any) {
     console.error('[enrich-bulk]', err.message);
     res.status(500).json({ error: "internal server error" });
