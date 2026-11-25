@@ -1,54 +1,60 @@
-# Dependencies
-node_modules/
-.pnp
-.pnp.js
 
-# Build output
-dist/
-build/
-*.tsbuildinfo
 
-# Environment / secrets
-.env
-.env.*
-!.env.example
-
-# Databases
-*.db
-*.db-wal
-*.db-shm
-*.sqlite
-*.sqlite3
-
-# Logs
-*.log
-logs/
-
+*~
+app/tests/.auth-cache.json
 # Backups / scratch
 *.bak
 *.bak-*
-*.pre-fix-*
-*.pre-move-*
-*.orig
-*~
-
-# OS / editor
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
-.claude/
-
-# Python
-__pycache__/
-*.py[cod]
-
+build/
+build/
+# Build output
 # Capacitor / Gradle
-mobile/android/.gradle/
+.claude/
+coverage/
+# Database
+# Databases
+*.db
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+# Dependencies
+dist/
+dist/
+.DS_Store
+.DS_Store
+.env
+.env*
+.env.*
+!.env.example
+!.env.example
+# Environment / secrets
+.idea/
+*.log
+*.log
+logs/
+# Logs
 mobile/android/app/build/
 mobile/android/build/
-mobile/android/local.properties
+mobile/android/.gradle/
 mobile/android/.idea/
-
+mobile/android/local.properties
+node_modules/
+node_modules/
+*.orig
+# OS / editor
+.pnp
+.pnp.js
+*.pre-fix-*
+*.pre-move-*
+__pycache__/
+*.py[cod]
+# Python
+*.sqlite
+*.sqlite
+*.sqlite3
+*.sqlite3
 # Test auth cache (contains a throwaway test session token)
-app/tests/.auth-cache.json
+Thumbs.db
+*.tsbuildinfo
+.vscode/
