@@ -20,6 +20,7 @@ import cors from "cors";
 import dns from 'dns/promises';
 import net from 'net';
 import { generateLeadjinLeads } from "./src/services/leadService.js";
+import type { LeadjinLead } from "./src/services/geminiService.ts";
 import { getGenAI, resolveModel, LEADJIN_PROVIDER } from "./src/services/genaiClient.js";
 import { waterfallEnrichment } from './src/services/waterfallEnrichment.js';
 import { enrichLead, enqueueEnrichment, enrichBatch, getQueueItem, getEnrichmentStats, type EnrichmentInput, setDatabase } from './src/services/enrichmentEngine.js';
@@ -810,25 +811,25 @@ db.exec(`
 `);
 
 // Performance indexes for analytics queries
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_user ON leads(user_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_user_status ON leads(user_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(user_id, created_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices(user_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_email_queue_user ON email_queue(user_id, sent_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_activity_log_user ON activity_log(user_id, created_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_email_events_queue ON email_events(email_queue_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_sequences_user ON email_sequences(user_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_enrollments_sequence ON sequence_enrollments(sequence_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_enrollments_next_send ON sequence_enrollments(status, next_send_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_lead ON bookings(lead_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_start ON bookings(start_time)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_outreach_lead ON outreach_messages(lead_id, user_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_outreach_sent ON outreach_messages(user_id, sent_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_replies_lead ON lead_replies(lead_id, user_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_replies_created ON lead_replies(user_id, created_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_user ON leads(user_id)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_user_status ON leads(user_id, status)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(user_id, created_at)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices(user_id, status)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_email_queue_user ON email_queue(user_id, sent_at)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_activity_log_user ON activity_log(user_id, created_at)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_email_events_queue ON email_events(email_queue_id)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_sequences_user ON email_sequences(user_id, status)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_enrollments_sequence ON sequence_enrollments(sequence_id, status)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_enrollments_next_send ON sequence_enrollments(status, next_send_at)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_lead ON bookings(lead_id)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_bookings_start ON bookings(start_time)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_outreach_lead ON outreach_messages(lead_id, user_id)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_outreach_sent ON outreach_messages(user_id, sent_at)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_replies_lead ON lead_replies(lead_id, user_id)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_replies_created ON lead_replies(user_id, created_at)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
 
 // Legacy migrations removed — all columns consolidated into CREATE TABLE above
 // Foreign key enforcement (for data integrity)
@@ -895,8 +896,8 @@ for (const migration of safeMigrations) {
     db.exec(migration);
   } catch (e: any) {
     // Column already exists — ignore
-    if (!e.message?.includes('duplicate column')) {
-      console.warn(`[Migration] ${migration}: ${e.message}`);
+    if (!(e as Error).message?.includes('duplicate column')) {
+      console.warn(`[Migration] ${migration}: ${(e as Error).message}`);
     }
   }
 }
@@ -926,7 +927,7 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_credit_txn_user ON credit_transactions(user_id, created_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_credit_txn_user ON credit_transactions(user_id, created_at)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
 
 // Intent signals table
 db.exec(`
@@ -959,7 +960,7 @@ try {
       AND is_founder = 0
       AND trial_ends_at IS NULL
   `).run();
-} catch (e) { /* already backfilled */ }
+} catch (e: unknown) { /* already backfilled */ }
 
 // WhatsApp Messages table
 db.exec(`
@@ -976,8 +977,8 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_messages_lead ON whatsapp_messages(lead_id, user_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_messages_wa_id ON whatsapp_messages(wa_message_id)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_messages_lead ON whatsapp_messages(lead_id, user_id)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_messages_wa_id ON whatsapp_messages(wa_message_id)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
 console.log('[Migration] WhatsApp messages table ready.');
 
 // WhatsApp Sequence tables
@@ -1006,9 +1007,9 @@ db.exec(`
     UNIQUE(sequence_id, lead_id)
   );
 `);
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_sequences_user ON wa_sequences(user_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_enrollments_seq ON wa_enrollments(sequence_id, status)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
-try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_enrollments_next ON wa_enrollments(status, next_send_at)"); } catch(e) { console.error("[Migration] Index creation failed:", e.message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_sequences_user ON wa_sequences(user_id, status)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_enrollments_seq ON wa_enrollments(sequence_id, status)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_wa_enrollments_next ON wa_enrollments(status, next_send_at)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
 console.log('[Migration] WhatsApp sequence tables ready.');
 
 // AI Price Suggestion cache (in-memory only, cleared on restart)
@@ -1123,7 +1124,7 @@ setInterval(() => {
       console.log(`[SessionCleanup] Removed ${result.changes} expired sessions`);
     }
   } catch (e: any) {
-    console.error('[SessionCleanup] Error:', e.message);
+    console.error('[SessionCleanup] Error:', (e as Error).message);
   }
 }, 60 * 60 * 1000); // Run every hour
 
@@ -1427,7 +1428,7 @@ app.put("/api/user/preferences", (req, res) => {
   if (!user) return;
   const existing = db.prepare("SELECT preferences FROM users WHERE id = ?").get(user.id) as any;
   let prefs = {};
-  try { prefs = JSON.parse(existing?.preferences || '{}'); } catch (e) { console.error('[Preferences] Failed to parse stored preferences:', e.message); }
+  try { prefs = JSON.parse(existing?.preferences || '{}'); } catch (e: unknown) { console.error('[Preferences] Failed to parse stored preferences:', (e as Error).message); }
   const merged = { ...prefs, ...req.body };
   db.prepare("UPDATE users SET preferences = ? WHERE id = ?").run(JSON.stringify(merged), user.id);
   res.json({ saved: true });
@@ -1752,7 +1753,7 @@ You have NO live web access in this environment — do not claim to have searche
       return { email: emailMatch[0], verified: false, source: 'google_search_ungrounded' };
     }
   } catch (e: any) {
-    console.warn('[Enrichment] Gemini search failed:', e.message);
+    console.warn('[Enrichment] Gemini search failed:', (e as Error).message);
   }
 
   // ── STEP 2: Scrape company website for contact emails ─────────────────────
@@ -1781,7 +1782,7 @@ You have NO live web access in this environment — do not claim to have searche
         domain = domainMatch[1];
       }
     } catch (e: any) {
-      console.warn('[Enrichment] Domain lookup failed:', e.message);
+      console.warn('[Enrichment] Domain lookup failed:', (e as Error).message);
     }
   }
   
@@ -2016,7 +2017,7 @@ If no LinkedIn profile found, return NULL. You have NO live web access here — 
     
     return null;
   } catch (e: any) {
-    console.warn('[LinkedIn Discovery] Failed:', e.message);
+    console.warn('[LinkedIn Discovery] Failed:', (e as Error).message);
     return null;
   }
 }
@@ -2386,7 +2387,7 @@ app.post("/api/leads/harvest", async (req, res) => {
     console.log(`[Harvest] ${cachedLeads.length} cached leads found; calling for ${leadLimit} more`);
 
     // Map searchParams to the expected generateLeadjinLeads parameters
-    const leadResults = await generateLeadjinLeads({
+    const leadResults: LeadjinLead[] = await generateLeadjinLeads({
       userIndustry: searchParams.targetIndustry || 'Technology',
       userServices: searchParams.userServices || '',
       userCaseStudy: searchParams.userCaseStudy || '',
@@ -2447,7 +2448,7 @@ app.post("/api/leads/harvest", async (req, res) => {
       }
     });
 
-    try { insertLeads(); } catch (e: any) { console.warn('[Harvest] Lead persistence failed:', e.message); }
+    try { insertLeads(); } catch (e: any) { console.warn('[Harvest] Lead persistence failed:', (e as Error).message); }
 
     // Return leads immediately — email enrichment happens separately via /api/leads/enrich
     res.json({ leads, usingPersonalKey, source });
@@ -2462,8 +2463,8 @@ app.post("/api/leads/harvest", async (req, res) => {
             // Update the lead in DB with verification status
             db.prepare(`UPDATE leads SET email_verified = ?, email_source = ? WHERE lead_id = ? AND user_id = ?`)
               .run(result.deliverable ? 1 : 0, result.deliverable ? 'smtp_verified' : 'unverified', lead.lead_id, user.id);
-          } catch (e) {
-            console.error('[Harvest] Background verification failed:', e.message);
+          } catch (e: unknown) {
+            console.error('[Harvest] Background verification failed:', (e as Error).message);
           }
         }
       }
@@ -2528,7 +2529,7 @@ app.post("/api/leads/enrich", async (req, res) => {
     }
 
     // Fall back to existing Gemini pipeline
-    const result = await enrichLeadEmail(lead, apiKey);
+    const result = await enrichLeadEmail(lead, apiKey ?? '');
     // Debit 1 credit only if email was found (no charge for misses)
     if (result.email && !founderUser) {
       debitEnrichmentCredits(user.id, 1, 'email_enrichment', `Email enrichment for ${lead.name} at ${lead.company}`, lead.lead_id);
@@ -2781,7 +2782,7 @@ app.post("/api/precrawl/start", async (req, res) => {
   res.json({ status: 'started', cities: cities || KSA_CITIES.slice(0, 5), industries: industries || INDUSTRIES.slice(0, 10) });
 
   setImmediate(() => {
-    runPreCrawlBatch(db, apiKey, cities, industries, delay_ms || 3000).catch(err => {
+    runPreCrawlBatch(db, apiKey ?? '', cities, industries, delay_ms || 3000).catch(err => {
       console.error('[PreCrawl] Batch failed:', err.message);
     });
   });
@@ -3318,7 +3319,7 @@ app.post("/api/leads/enrich-linkedin", async (req, res) => {
   }
   
   try {
-    const linkedinUrl = await discoverLinkedIn(name, company, apiKey);
+    const linkedinUrl = await discoverLinkedIn(name, company, apiKey ?? '');
     
     if (linkedinUrl) {
       // Update DB
@@ -5004,7 +5005,7 @@ Return ONLY a JSON object in this exact format:
         jsonStr = jsonStr.replace(/^```\n?/, '').replace(/\n?```$/, '');
       }
       result = JSON.parse(jsonStr);
-    } catch (e) {
+    } catch (e: unknown) {
       result = { min_sar: 5000, max_sar: 15000, rationale: "Standard GCC market rate", confidence: "medium" };
     }
     
@@ -5089,7 +5090,7 @@ app.post("/api/unsubscribe", (req, res) => {
   // Mark lead as do_not_contact (add column if not exists)
   try {
     db.exec("ALTER TABLE leads ADD COLUMN do_not_contact INTEGER DEFAULT 0");
-  } catch (e) {}
+  } catch (e: unknown) {}
   
   const lead = db.prepare("SELECT * FROM leads WHERE email = ?").get(email) as any;
   if (lead) {
@@ -5118,7 +5119,7 @@ app.get("/api/email/track/:id/open", (req, res) => {
     console.log(`[EmailTrack] Open recorded for email ${id}`);
   } catch (e: any) {
     // Silently fail - don't expose errors to tracking pixel
-    console.error(`[EmailTrack] Error recording open:`, e.message);
+    console.error(`[EmailTrack] Error recording open:`, (e as Error).message);
   }
   
   // Return 1x1 transparent PNG
@@ -5153,7 +5154,7 @@ app.get("/api/email/track/:id/click", (req, res) => {
     );
     console.log(`[EmailTrack] Click recorded for email ${id} to ${url}`);
   } catch (e: any) {
-    console.error(`[EmailTrack] Error recording click:`, e.message);
+    console.error(`[EmailTrack] Error recording click:`, (e as Error).message);
   }
   
   // Redirect to the original URL
@@ -5728,7 +5729,7 @@ app.post("/api/signals/detect", async (req, res) => {
 
     res.json({ signals: stored, detected: signals.length, inserted });
   } catch (e: any) {
-    console.error('[Signals] detect error:', e.message);
+    console.error('[Signals] detect error:', (e as Error).message);
     res.status(500).json({ error: "Failed to detect signals", });
   }
 });
@@ -6283,7 +6284,7 @@ setInterval(async () => {
             insertSignals(allSignals, entry.lead_id, entry.user_id);
           }
         } catch (e: any) {
-          console.warn(`[SignalsMonitor] Error for "${companyName}":`, e.message);
+          console.warn(`[SignalsMonitor] Error for "${companyName}":`, (e as Error).message);
         }
       }));
     }
@@ -6291,7 +6292,7 @@ setInterval(async () => {
     intentSignalService.pruneCache();
     console.log('[SignalsMonitor] Scan complete.');
   } catch (e: any) {
-    console.error('[SignalsMonitor] Fatal error:', e.message);
+    console.error('[SignalsMonitor] Fatal error:', (e as Error).message);
   }
 }, 6 * 60 * 60 * 1000); // 6 hours
 
@@ -6997,7 +6998,7 @@ async function startServer() {
         const template = fs.readFileSync(indexPath, "utf-8");
         const html = await vite.transformIndexHtml(req.url, template);
         res.status(200).set({ "Content-Type": "text/html" }).end(html);
-      } catch (e) {
+      } catch (e: unknown) {
         console.error(`[VITE] Error serving HTML:`, e);
         vite.ssrFixStacktrace(e as Error);
         next(e);
@@ -7067,8 +7068,8 @@ async function startServer() {
           console.log('[First-Boot] No leads found; run POST /api/test/seed (founder) to seed case study data.');
         }
       }
-    } catch (e) {
-      console.error('[First-Boot] Seed check failed:', e.message);
+    } catch (e: unknown) {
+      console.error('[First-Boot] Seed check failed:', (e as Error).message);
     }
 
     // ── PERPETUAL CRAWL — gated by ENABLE_PERPETUAL_CRAWL=true ──
@@ -7081,8 +7082,8 @@ async function startServer() {
       console.log(`[PreCrawler] PERPETUAL CRAWL starting in 10s — ${CRAWL_PHASES.length} phases, ${totalCities} cities, ${INDUSTRIES.length} industries`);
 
       setTimeout(() => {
-        startPerpetualCrawl(db, undefined, 3000).catch(err => {
-          console.error('[PreCrawler] Perpetual crawl crashed:', err.message);
+        startPerpetualCrawl(db, '', 3000).catch(err => {
+          console.error('[PreCrawler] Perpetual crawl crashed:', err.message ?? '');
         });
       }, 10000);
 

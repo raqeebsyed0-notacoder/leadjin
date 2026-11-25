@@ -28,6 +28,7 @@ import {
   saveStakeholder,
   getStakeholdersByDomain
 } from './jinLedger.js';
+import { getGenAI } from './genaiClient.js';
 import {
   verifyEmailSMTP,
   verifyPhoneHLR,
@@ -52,6 +53,18 @@ import {
   addOutreachHistory,
   addStakeholderNote
 } from './jinLedgerEnhanced.js';
+
+// ---------------------------------------------------------------------------
+// Jin chat endpoint
+// ---------------------------------------------------------------------------
+
+/** Clean raw model prose for human-facing display (strip code fences, trim). */
+function cleanModelText(text: string): string {
+  let t = text.trim();
+  t = t.replace(/^```[a-zA-Z0-9_-]*\n?/gm, '').trim();
+  t = t.replace(/\n?```$/gm, '').trim();
+  return t;
+}
 
 export function createCompleteJinRouter(
   db: Database.Database,
@@ -80,7 +93,7 @@ export function createCompleteJinRouter(
     if (userRecord?.gemini_api_key) {
       apiKey = userRecord.gemini_api_key;
     }
-    return apiKey;
+    return apiKey ?? null;
   };
 
   // ============================================================================
@@ -95,10 +108,9 @@ export function createCompleteJinRouter(
     if (!domain) return res.status(400).json({ error: 'Domain is required' });
 
     const apiKey = getGeminiKey(req, user);
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured' });
 
     const config: JinExtractionConfig = {
-      geminiApiKey: apiKey,
+      geminiApiKey: apiKey ?? '',
       headless: true,
       maxStakeholders: 3,
       verifyEmails,
@@ -276,7 +288,6 @@ export function createCompleteJinRouter(
     if (!user) return;
 
     const apiKey = getGeminiKey(req, user);
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured' });
 
     const { stakeholder, sender, context } = req.body;
     if (!stakeholder || !sender) {
@@ -288,7 +299,7 @@ export function createCompleteJinRouter(
         stakeholder,
         sender,
         context || {},
-        apiKey
+        apiKey ?? ''
       );
 
       // Save to outreach history
@@ -493,9 +504,8 @@ export function createCompleteJinRouter(
     if (!user) return;
 
     const apiKey = getGeminiKey(req, user);
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured' });
 
-    const brain = new JinBrain(apiKey);
+    const brain = new JinBrain(apiKey ?? '');
     const { lead } = req.body;
 
     if (!lead) return res.status(400).json({ error: 'lead data required' });
@@ -524,9 +534,8 @@ export function createCompleteJinRouter(
     if (!user) return;
 
     const apiKey = getGeminiKey(req, user);
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured' });
 
-    const brain = new JinBrain(apiKey);
+    const brain = new JinBrain(apiKey ?? '');
     const { lead, context } = req.body;
 
     try {
@@ -542,9 +551,8 @@ export function createCompleteJinRouter(
     if (!user) return;
 
     const apiKey = getGeminiKey(req, user);
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured' });
 
-    const brain = new JinBrain(apiKey);
+    const brain = new JinBrain(apiKey ?? '');
     const { entityName, industry } = req.body;
 
     if (!entityName) return res.status(400).json({ error: 'Entity name required' });
@@ -555,6 +563,88 @@ export function createCompleteJinRouter(
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
+  });
+
+  // ============================================================================
+  // Jin Chat Endpoint
+  //
+  // Local models only. No Gemini / Vertex / WATHQ keys are consulted here.
+  // If a local model path/environment is not configured, the endpoint
+  // transparently falls back to a data-driven stub built from existing Jin
+  // verify / status data, and labels the response clearly as "stubbed".
+  // ============================================================================
+
+  router.post('/chat', async (req: Request, res: Response) => {
+    const user = requireAuth(req, res);
+    if (!user) return;
+
+    const { message, history } = req.body;
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    // --- Local model gate (NO Gemini / Vertex / WATHQ) ---
+    // LOCAL mode is the default: LEADJIN_PROVIDER=ollama drives the
+    // provider-agnostic genaiClient at src/services/genaiClient.ts, which
+    // dispatches to local Ollama gemma4:e4b. An explicit local path
+    // (LOCAL_MODEL_PATH / OLLAMA_MODEL) takes precedence over the env default.
+    const localModelPath = process.env.LOCAL_MODEL_PATH || process.env.OLLAMA_MODEL || null;
+    const isLocal = localModelPath !== null || process.env.LEADJIN_PROVIDER === 'ollama';
+
+    let reply: string;
+    let source: string;
+
+    if (isLocal) {
+      // A local model is configured — invoke it through the provider-agnostic
+      // genaiClient (LOCAL mode → Ollama gemma4:e4b). No Gemini / Vertex /
+      // WATHQ keys are consulted here.
+      const ai = getGenAI();
+      const aiResponse = await ai.models.generateContent({
+        model: localModelPath || undefined,
+        contents: message,
+        config: { temperature: 0.2, maxTokens: 1024 },
+      });
+      reply = cleanModelText(aiResponse.text || '[Jin] (no reply from local model)');
+      source = 'local';
+    } else {
+      // No local model available — stub using existing Jin verify/status data.
+      const jinStatus = getEnhancedJinStatus(db);
+      const verifyStatsRaw = getVerificationStats(db);
+      const recentWork = getRecentWorkLog(db, 10);
+      const activeJobs = getAllJobs().filter(
+        (j: any) => j.status !== 'completed' && j.status !== 'failed'
+      );
+
+      const metrics = (jinStatus.allTime || {}) as any;
+      reply =
+        `[STUBBED — no local model configured] ` +
+        `Jin is available. Current state: ` +
+        `${metrics.totalStakeholders || 0} stakeholders found, ` +
+        `${metrics.totalVerified || 0} verified, ` +
+        `${metrics.totalOutreachSent || 0} outreach sent. ` +
+        `${activeJobs.length > 0 ? 'Active extraction jobs: ' + activeJobs.length + '. ' : 'No active jobs. '}` +
+        `You said: "${message}". Local LLM chat is offline — this is a data-driven stub from Jin's verify/status tables.`;
+      source = 'stubbed_no_local_model';
+    }
+
+    // Persist a lightweight chat log entry into the existing work log.
+    addWorkLogEntry(db, {
+      job_id: `chat-${Date.now()}`,
+      action_type: 'chat' as any,
+      entity_domain: user.email || 'unknown',
+      entity_name: user.email || 'unknown',
+      description: `Jin chat: "${message.slice(0, 200)}"`,
+      status: 'completed',
+      metadata: { user_id: user.id, source, local_model: localModelPath }
+    });
+
+    res.json({
+      reply,
+      source,
+      localModel: localModelPath,
+      isStubbed: !isLocal,
+      timestamp: new Date().toISOString()
+    });
   });
 
   return router;
