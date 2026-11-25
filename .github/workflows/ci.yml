@@ -12,7 +12,10 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -20,6 +23,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
       - name: Install
         run: npm ci
       - name: Lint
@@ -28,5 +33,13 @@ jobs:
         run: npm run build:server
       - name: Build app
         run: npm run build
+      - name: Start service
+        run: |
+          npm run start > /tmp/leadjin-ci.log 2>&1 &
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:3001/api/health > /dev/null; then echo "service up"; exit 0; fi
+            sleep 2
+          done
+          echo "service failed to start"; tail -30 /tmp/leadjin-ci.log; exit 1
       - name: Tests
         run: npx vitest run
