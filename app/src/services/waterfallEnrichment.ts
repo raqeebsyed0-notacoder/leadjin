@@ -7,17 +7,11 @@
  *
  * Providers (lowest priority number = tried first):
  *   1. Gemini Grounding  (GEMINI_API_KEY) — Google Search grounded email discovery
- *   2. Apollo.io          (APOLLO_API_KEY)    [testing-only, behind LEADJIN_TESTING_MODE]
- *   3. Snov.io            (SNOV_API_KEY + SNOV_API_SECRET)  [testing-only, behind LEADJIN_TESTING_MODE]
+ *   2. Apollo.io          (APOLLO_API_KEY)
+ *   3. Snov.io            (SNOV_API_KEY + SNOV_API_SECRET)
  *   4. SMTP MX verifier   (always available, used for verification only)
  *
- * Hunter.io has been replaced by Gemini Grounding (2026-06-02). Hunter is never
- * used as a verification leg — SMTP built-in is the sole verifier.
- *
- * D3 (2026-10-20): Apollo and Snov are testing-only legs. They are instantiated
- * only when LEADJIN_TESTING_MODE is set. Each testing-provider API call is counted
- * against a per-day cap (LEADJIN_TESTING_CAP, default 20). Production runs on the
- * model key (GEMINI_API_KEY) + SMTP verify alone — no Apollo/Snov/Hunter required.
+ * Hunter.io has been replaced by Gemini Grounding (2026-06-02).
  */
 
 import dns from 'dns/promises';
@@ -126,62 +120,6 @@ export async function mxCheck(domain: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Testing-only provider gate (D3 refactor)
-//
-// Apollo and Snov are testing-only legs — they require LEADJIN_TESTING_MODE
-// to be explicitly enabled. Each testing-provider API call is counted against
-// a per-day cap (LEADJIN_TESTING_CAP, default 20) to stay inside free-tier
-// limits. When LEADJIN_TESTING_MODE is unset or "0", Apollo/Snov are never
-// instantiated and never appear in the provider list — prod runs on the model
-// key (GEMINI) + SMTP verify alone.
-// ---------------------------------------------------------------------------
-
-const TESTING_MODE = process.env.LEADJIN_TESTING_MODE === '1' || process.env.LEADJIN_TESTING_MODE === 'true';
-const TESTING_DAILY_CAP = parseInt(process.env.LEADJIN_TESTING_CAP ?? '20', 10);
-const TESTING_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h UTC day
-
-interface TestingLedger {
-  day: string; // UTC date YYYY-MM-DD
-  calls: number;
-}
-
-// Module-level burn ledger for testing-only provider calls (in-process)
-let testingLedger: TestingLedger = {
-  day: new Date().toISOString().slice(0, 10),
-  calls: 0,
-};
-
-function _resetTestingLedgerIfRolled(): void {
-  const today = new Date().toISOString().slice(0, 10);
-  if (testingLedger.day !== today) {
-    testingLedger = { day: today, calls: 0 };
-  }
-}
-
-/** Returns true if a testing-only provider API call is allowed under today's cap */
-export function testingCallAllowed(): boolean {
-  _resetTestingLedgerIfRolled();
-  return testingLedger.calls < TESTING_DAILY_CAP;
-}
-
-/** Record a testing-only provider API call after the cap check passes */
-export function recordTestingCall(): void {
-  _resetTestingLedgerIfRolled();
-  testingLedger.calls += 1;
-}
-
-/** Current testing-provider burn ledger state (for admin/debugging) */
-export function getTestingLedger(): { day: string; calls: number; cap: number; remaining: number } {
-  _resetTestingLedgerIfRolled();
-  return {
-    day: testingLedger.day,
-    calls: testingLedger.calls,
-    cap: TESTING_DAILY_CAP,
-    remaining: TESTING_DAILY_CAP - testingLedger.calls,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -426,13 +364,6 @@ class ApolloProvider implements EnrichmentProvider {
   }
 
   private async matchPerson(params: ContactInput): Promise<any | null> {
-    // Testing-only gate: per-day cap on Apollo API calls (D3)
-    if (!testingCallAllowed()) {
-      console.warn('[Waterfall][Apollo] Testing daily cap reached — skipping call');
-      return null;
-    }
-    recordTestingCall();
-
     const { firstName, lastName } = splitName(params.name);
 
     try {
@@ -553,13 +484,6 @@ class SnovProvider implements EnrichmentProvider {
   }
 
   async findEmail(params: ContactInput): Promise<EnrichmentResult | null> {
-    // Testing-only gate: per-day cap on Snov API calls (D3)
-    if (!testingCallAllowed()) {
-      console.warn('[Waterfall][Snov] Testing daily cap reached — skipping call');
-      return null;
-    }
-    recordTestingCall();
-
     const token = await this.getAccessToken();
     if (!token) return null;
 
@@ -632,37 +556,14 @@ export class WaterfallEnrichment {
   private providers: EnrichmentProvider[];
 
   constructor() {
-    // Gemini Grounding is the primary provider (requires GEMINI_API_KEY) —
-    // this is the "model key" path. Production runs on this alone.
+    // Gemini Grounding is the primary provider (requires GEMINI_API_KEY).
+    // ApolloProvider and SnovProvider are intentionally NOT added here (de-pay: no paid APIs).
+    // Their classes remain defined for future opt-in but are never instantiated in production.
     const gemini = new GeminiProvider();
-    const providers: EnrichmentProvider[] = [gemini];
-
-    // Apollo and Snov are testing-only legs (D3). They are instantiated only
-    // when LEADJIN_TESTING_MODE is explicitly enabled. Each testing-provider
-    // call is gated by a per-day cap (see testingCallAllowed/recordTestingCall).
-    // When the flag is OFF, Apollo/Snov never appear in the provider list.
-    if (TESTING_MODE) {
-      console.log('[Waterfall] Testing mode ON — enabling Apollo + Snov with per-day cap', TESTING_DAILY_CAP);
-      const apollo = new ApolloProvider();
-      const snov = new SnovProvider();
-      if (apollo.isConfigured()) {
-        providers.push(apollo);
-        console.log('[Waterfall] Apollo enabled (testing-only leg)');
-      } else {
-        console.log('[Waterfall] Apollo key absent — skipping testing leg');
-      }
-      if (snov.isConfigured()) {
-        providers.push(snov);
-        console.log('[Waterfall] Snov enabled (testing-only leg)');
-      } else {
-        console.log('[Waterfall] Snov key absent — skipping testing leg');
-      }
-    } else {
-      console.log('[Waterfall] Testing mode OFF — prod path: Gemini + SMTP only');
-    }
-
-    providers.push(new SmtpBuiltinProvider());
-    this.providers = providers.sort((a, b) => a.priority - b.priority);
+    this.providers = [
+      gemini,
+      new SmtpBuiltinProvider(),
+    ].sort((a, b) => a.priority - b.priority);
   }
 
   /** Returns only providers that have their API keys configured */
@@ -744,9 +645,7 @@ export class WaterfallEnrichment {
    * Triple verification pipeline:
    *   1. Syntax check
    *   2. DNS MX check
-   *   3. SMTP built-in verifier (Hunter was replaced by Gemini on 2026-06-02;
-   *      Gemini does not perform email verification, so SMTP built-in is the
-   *      sole verifier in both prod and testing paths)
+   *   3. Best available provider verifier (Hunter if configured, else SMTP built-in)
    */
   async verifyEmail(email: string): Promise<VerificationResult> {
     // Step 1: syntax
@@ -763,10 +662,13 @@ export class WaterfallEnrichment {
       return { valid: true, deliverable: false, catchAll: false, source: 'mx_check' };
     }
 
-    // Step 3: SMTP built-in verification (sole verifier — Hunter replaced by Gemini)
+    // Step 3: provider verify (prefer Hunter, fall back to SMTP)
+    const hunterProvider = this.providers.find(p => p.name === 'hunter' && p.isConfigured());
     const smtpProvider = this.providers.find(p => p.name === 'smtp_builtin')!;
-    const result = await smtpProvider.verifyEmail(email);
-    console.log(`[Waterfall] verifyEmail — ${smtpProvider.name}: deliverable=${result.deliverable}`);
+
+    const verifier = hunterProvider ?? smtpProvider;
+    const result = await verifier.verifyEmail(email);
+    console.log(`[Waterfall] verifyEmail — ${verifier.name}: deliverable=${result.deliverable}`);
     return result;
   }
 

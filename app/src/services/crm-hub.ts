@@ -61,7 +61,7 @@ export interface FunnelData {
 }
 
 export interface CSVExportOptions {
-  userId?: number;
+  userId: number;
   includeFields?: string[];
 }
 

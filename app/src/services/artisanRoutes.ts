@@ -139,9 +139,6 @@ export function createArtisanRouter(
     if (!user) return;
 
     const apiKey = getApiKey(user.id);
-    if (!apiKey) {
-      return res.status(503).json({ error: 'Gemini API key not configured' });
-    }
 
     const { lead, context, messageType, language } = req.body;
     if (!lead?.name || !lead?.title || !lead?.company) {
@@ -167,7 +164,7 @@ export function createArtisanRouter(
         leadProfile,
         enrichedContext,
         messageType || 'cold_email',
-        apiKey
+        apiKey ?? undefined
       );
 
       // If a template type is specified, optionally merge template structure
@@ -248,9 +245,6 @@ export function createArtisanRouter(
     }
 
     const apiKey = getApiKey(user.id);
-    if (!apiKey) {
-      return res.status(503).json({ error: 'Gemini API key not configured' });
-    }
 
     const userRow = db.prepare('SELECT company_name, email FROM users WHERE id = ?').get(user.id) as any;
     const classifyOptions = {
@@ -261,7 +255,7 @@ export function createArtisanRouter(
     };
 
     try {
-      const result = await classifyReply(emailBody, originalOutreach, classifyOptions, apiKey);
+      const result = await classifyReply(emailBody, originalOutreach, classifyOptions, apiKey ?? undefined);
       res.json(result);
     } catch (error: any) {
       console.error('[Artisan:Module4] Classification failed:', error.message);

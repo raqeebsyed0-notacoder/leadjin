@@ -7,8 +7,61 @@
  * Also monitors inbox and handles replies autonomously.
  */
 
-import { GoogleGenAI } from '@google/genai';
+
 import { randomUUID } from 'crypto';
+// ---------------------------------------------------------------------------
+// Prose hygiene (F-21..F-25): no raw model text, code fence or JSON document
+// reaches a user. cleanModelText returns display-safe prose; cleanJsonResponse
+// returns a parseable JSON document with chatter and fences removed.
+// ---------------------------------------------------------------------------
+
+function cleanModelText(text: string): string {
+  let t = String(text ?? '').trim();
+  t = t.replace(/```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)```/g, (_all, inner: string) => {
+    const body = inner.trim();
+    return /^[[{]/.test(body) ? '' : body;
+  });
+  t = t.replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '');
+  t = t.replace(/^(?:(?:sure|certainly|of course|here(?:'s| is)[^\n:]{0,40}:?|here you go)[,\s]*)+/i, '');
+  const trimmed = t.trim();
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try { JSON.parse(trimmed); return ''; } catch { /* not a JSON document */ }
+  }
+  // A short chatter prefix in front of a JSON blob is still not prose.
+  const jsonStart = trimmed.search(/[[{]/);
+  if (jsonStart > 0) {
+    const prefix = trimmed.slice(0, jsonStart).trim();
+    if (prefix.length <= 80 && !prefix.includes('\n')) {
+      try { JSON.parse(cleanJsonResponse(trimmed)); return ''; } catch { /* prose with an inline brace */ }
+    }
+  }
+  return t.trim();
+}
+
+function cleanTextFields<T>(value: T): T {
+  if (typeof value === 'string') return cleanModelText(value) as unknown as T;
+  if (Array.isArray(value)) return value.map((v) => cleanTextFields(v)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = cleanTextFields(v);
+    return out as T;
+  }
+  return value;
+}
+
+function cleanJsonResponse(text: string): string {
+  let t = String(text ?? '').trim();
+  t = t.replace(/```[a-zA-Z0-9_-]*\s*\n/g, '').replace(/```\s*$/g, '');
+  const start = t.search(/[[{]/);
+  if (start > 0) t = t.slice(start);
+  try { JSON.parse(t); return t; } catch { /* trim trailing chatter below */ }
+  const end = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
+  if (end >= 0 && end < t.length - 1) t = t.slice(0, end + 1);
+  return t;
+}
+
+
 import { getGenAI } from './genaiClient.js';
 
 export interface OutreachTemplate {
@@ -118,7 +171,7 @@ const SAUDI_ETIQUETTE = {
 };
 
 /**
- * Generate strategic outreach email using Gemini 2.5 Flash
+ * Generate strategic outreach email using the configured local model
  */
 export async function generateStrategicOutreach(
   stakeholder: {
@@ -202,14 +255,14 @@ RESPONSE FORMAT (JSON):
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'pro',
       contents: prompt,
       config: { responseMimeType: 'application/json' }
     });
 
     const text = response.text || '';
-    const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
-    const result = JSON.parse(cleaned);
+    const cleaned = cleanJsonResponse(text);
+    const result = cleanTextFields(JSON.parse(cleanJsonResponse(text)));
 
     return {
       id: `outreach-${randomUUID()}`,
@@ -288,7 +341,7 @@ ${sender.companyName}`;
 }
 
 /**
- * Analyze email reply using Gemini
+ * Analyze email reply using the configured local model
  */
 export async function analyzeReply(
   emailContent: string,
@@ -332,14 +385,14 @@ Respond with JSON:
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-1.5-flash',
+      model: 'fast',
       contents: prompt,
       config: { responseMimeType: 'application/json' }
     });
 
     const text = response.text || '';
-    const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
-    const result = JSON.parse(cleaned);
+    const cleaned = cleanJsonResponse(text);
+    const result = cleanTextFields(JSON.parse(cleanJsonResponse(text)));
 
     return {
       replyId: `reply-${randomUUID()}`,
@@ -471,11 +524,11 @@ Return only the email body text.`;
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-1.5-flash',
+      model: 'pro',
       contents: prompt
     });
 
-    return response.text || generateBasicFollowUp(replyAnalysis, sender);
+    return cleanModelText(response.text || generateBasicFollowUp(replyAnalysis, sender));
   } catch (error) {
     return generateBasicFollowUp(replyAnalysis, sender);
   }

@@ -35,8 +35,7 @@ import {
   Zap,
   Eye,
   Hand,
-  Mic,
-  MessageCircle
+  Mic
 } from 'lucide-react';
 
 interface JinDashboardProps {
@@ -45,7 +44,7 @@ interface JinDashboardProps {
   onToggle: () => void;
 }
 
-type TabType = 'overview' | 'extraction' | 'verification' | 'outreach' | 'kpi' | 'chat';
+type TabType = 'overview' | 'extraction' | 'verification' | 'outreach' | 'kpi';
 
 const JinEmployeeDashboard: React.FC<JinDashboardProps> = ({
   authToken,
@@ -64,9 +63,6 @@ const JinEmployeeDashboard: React.FC<JinDashboardProps> = ({
   const [verificationResult, setVerificationResult] = useState<any>(null);
   const [outreachDraft, setOutreachDraft] = useState<any>(null);
   const [kpiReport, setKpiReport] = useState<any>(null);
-  const [chatMessages, setChatMessages] = useState<any[]>([]);
-  const [chatInput, setChatInput] = useState('');
-  const [isSendingChat, setIsSendingChat] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -223,53 +219,6 @@ const JinEmployeeDashboard: React.FC<JinDashboardProps> = ({
     }
   };
 
-  // Send a chat message to Jin
-  const sendChat = async () => {
-    if (!chatInput.trim() || isSendingChat) return;
-
-    const userMsg = chatInput.trim();
-    setChatInput('');
-    setIsSendingChat(true);
-
-    // Add user message
-    const userMessage = { role: 'user', content: userMsg };
-    setChatMessages((prev) => [...prev, userMessage]);
-
-    try {
-      const response = await fetch('/api/jin/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({
-          message: userMsg,
-          history: chatMessages
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const botMessage = { role: 'assistant', content: data.reply, source: data.source, isStubbed: data.isStubbed };
-        setChatMessages((prev) => [...prev, botMessage]);
-      } else {
-        const error = await response.json();
-        setChatMessages((prev) => [
-          ...prev,
-          { role: 'assistant', content: `Error: ${error.error || 'Failed to send message'}`, isError: true }
-        ]);
-      }
-    } catch (error: any) {
-      console.error('[Jin] Chat failed:', error);
-      setChatMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: `Connection error: ${error?.message || 'unknown'}`, isError: true }
-      ]);
-    } finally {
-      setIsSendingChat(false);
-    }
-  };
-
   if (!isOpen) {
     return (
       <motion.button
@@ -337,8 +286,7 @@ const JinEmployeeDashboard: React.FC<JinDashboardProps> = ({
           { id: 'extraction', label: 'Extract', icon: Eye },
           { id: 'verification', label: 'Verify', icon: Shield },
           { id: 'outreach', label: 'Outreach', icon: Mic },
-          { id: 'kpi', label: 'Analytics', icon: BarChart3 },
-          { id: 'chat', label: 'Chat', icon: MessageCircle }
+          { id: 'kpi', label: 'Analytics', icon: BarChart3 }
         ].map((tab) => (
           <button
             key={tab.id}
@@ -754,71 +702,6 @@ const JinEmployeeDashboard: React.FC<JinDashboardProps> = ({
                 <p className="text-sm">Load a report to view analytics</p>
               </div>
             )}
-          </div>
-        )}
-
-        {/* Chat Tab */}
-        {activeTab === 'chat' && (
-          <div className="flex flex-col h-full">
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-              {chatMessages.length === 0 ? (
-                <div className="text-center py-8 text-zinc-500">
-                  <MessageCircle className="w-12 h-12 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">Start a conversation with Jin</p>
-                  <p className="text-xs text-zinc-400 mt-1">Ask about stakeholders, verification, or outreach.</p>
-                </div>
-              ) : (
-                chatMessages.map((msg, idx) => (
-                  <div
-                    key={idx}
-                    className={`p-3 rounded-lg text-sm ${
-                      msg.role === 'user'
-                        ? 'bg-emerald-100 dark:bg-emerald-900/30 ml-8'
-                        : msg.isError
-                        ? 'bg-red-50 dark:bg-red-900/20 mr-8'
-                        : 'bg-zinc-100 dark:bg-zinc-800 mr-8'
-                    }`}
-                  >
-                    <div className={msg.role === 'user' ? 'text-zinc-900 dark:text-white' : 'text-zinc-700 dark:text-zinc-300'}>
-                      {msg.content}
-                    </div>
-                    {msg.isStubbed && (
-                      <span className="text-xs text-amber-600 dark:text-amber-400 mt-1 block">
-                        — stubbed (no local model configured)
-                      </span>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Input */}
-            <div className="pt-3 border-t border-zinc-200 dark:border-zinc-800 shrink-0">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Type a message…"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !isSendingChat && sendChat()}
-                  disabled={isSendingChat}
-                  className="flex-1 px-3 py-2 text-sm bg-white dark:bg-zinc-700 border border-zinc-200 dark:border-zinc-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
-                />
-                <button
-                  onClick={sendChat}
-                  disabled={!chatInput.trim() || isSendingChat}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-zinc-300 text-white rounded-lg text-sm font-medium flex items-center gap-1"
-                >
-                  {isSendingChat ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Send className="w-4 h-4" />
-                  )}
-                  Send
-                </button>
-              </div>
-            </div>
           </div>
         )}
       </div>

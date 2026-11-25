@@ -1,7 +1,7 @@
 /**
  * Module 2: The Employee's Eyes (Stealth Extraction)
  * 
- * Jin's stealth extraction service - uses Puppeteer and Gemini 2.5 Flash
+ * Jin's stealth extraction service - uses Puppeteer and the configured local model
  * to autonomously discover Saudi stakeholders and their verified contact data.
  * 
  * This is Jin's "vision" - he can see and extract intelligence from:
@@ -9,11 +9,68 @@
  * - Saudi corporate registries
  * - Regional news sources
  * - Company websites
+ *
+ * FIND legs (source provenance): this is the stealth web-extraction leg
+ * (FIND-3 — corroborated page fetch alongside the keyless Jina fetch). It
+ * supplies stakeholders and contact fields, never a provenance flag.
+ * verified_real stays with the huntOrchestrator five-field gate (email,
+ * person name, company name, linkedin, hq_city) AND evidence_urls.
  */
 
+// ---------------------------------------------------------------------------
+// Prose hygiene (F-21..F-25): no raw model text, code fence or JSON document
+// reaches a user. cleanModelText returns display-safe prose; cleanJsonResponse
+// returns a parseable JSON document with chatter and fences removed.
+// ---------------------------------------------------------------------------
+
+function cleanModelText(text: string): string {
+  let t = String(text ?? '').trim();
+  t = t.replace(/```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)```/g, (_all, inner: string) => {
+    const body = inner.trim();
+    return /^[[{]/.test(body) ? '' : body;
+  });
+  t = t.replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '');
+  t = t.replace(/^(?:(?:sure|certainly|of course|here(?:'s| is)[^\n:]{0,40}:?|here you go)[,\s]*)+/i, '');
+  const trimmed = t.trim();
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try { JSON.parse(trimmed); return ''; } catch { /* not a JSON document */ }
+  }
+  // A short chatter prefix in front of a JSON blob is still not prose.
+  const jsonStart = trimmed.search(/[[{]/);
+  if (jsonStart > 0) {
+    const prefix = trimmed.slice(0, jsonStart).trim();
+    if (prefix.length <= 80 && !prefix.includes('\n')) {
+      try { JSON.parse(cleanJsonResponse(trimmed)); return ''; } catch { /* prose with an inline brace */ }
+    }
+  }
+  return t.trim();
+}
+
+function cleanTextFields<T>(value: T): T {
+  if (typeof value === 'string') return cleanModelText(value) as unknown as T;
+  if (Array.isArray(value)) return value.map((v) => cleanTextFields(v)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = cleanTextFields(v);
+    return out as T;
+  }
+  return value;
+}
+
+function cleanJsonResponse(text: string): string {
+  let t = String(text ?? '').trim();
+  t = t.replace(/```[a-zA-Z0-9_-]*\s*\n/g, '').replace(/```\s*$/g, '');
+  const start = t.search(/[[{]/);
+  if (start > 0) t = t.slice(start);
+  try { JSON.parse(t); return t; } catch { /* trim trailing chatter below */ }
+  const end = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
+  if (end >= 0 && end < t.length - 1) t = t.slice(0, end + 1);
+  return t;
+}
 import puppeteer, { Browser, Page } from 'puppeteer';
 import type { LaunchOptions } from 'puppeteer';
-import { GoogleGenAI } from '@google/genai';
+
 import { getGenAI } from './genaiClient.js';
 import { randomUUID } from 'crypto';
 
@@ -125,7 +182,7 @@ function logAction(job: JinExtractionJob, action: string, details: string, statu
 }
 
 /**
- * Use Gemini 2.5 Flash to analyze company and identify key stakeholders
+ * Use the configured local model to analyze a company and identify stakeholders
  */
 async function analyzeCompanyWithGemini(
   domain: string,
@@ -168,7 +225,7 @@ If you cannot find real names, return an empty array []. Do not make up names.`;
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'fast',
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
@@ -177,8 +234,8 @@ If you cannot find real names, return an empty array []. Do not make up names.`;
     });
     
     const text = response.text || '';
-    const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
-    const stakeholders = JSON.parse(cleaned);
+    const cleaned = cleanJsonResponse(text).trim();
+    const stakeholders = cleanTextFields(JSON.parse(cleanJsonResponse(text)));
     
     if (Array.isArray(stakeholders)) {
       return stakeholders.map((s: any) => ({
@@ -189,7 +246,7 @@ If you cannot find real names, return an empty array []. Do not make up names.`;
     }
     return [];
   } catch (error: any) {
-    console.warn('[Jin] Gemini analysis failed:', error.message);
+    console.warn('[Jin] Model analysis failed:', error.message);
     return [];
   }
 }
@@ -497,10 +554,10 @@ export async function runStealthExtraction(
     browser = await launchStealthBrowser(config);
     logAction(job, 'Browser Ready', 'Stealth browser initialized successfully', 'success');
     
-    // Step 1: Analyze company with Gemini
+    // Step 1: Analyze company with the configured model
     job.status = 'extracting';
     job.progress = 10;
-    logAction(job, 'Intelligence Gathering', `Analyzing ${job.domain} with Gemini 2.5 Flash...`, 'info');
+    logAction(job, 'Intelligence Gathering', `Analyzing ${job.domain} with the configured local model...`, 'info');
     
     const geminiResults = await analyzeCompanyWithGemini(
       job.domain,
@@ -511,7 +568,7 @@ export async function runStealthExtraction(
     logAction(
       job, 
       'Stakeholders Identified', 
-      `Gemini found ${geminiResults.length} key decision-makers`,
+      `Found ${geminiResults.length} key decision-makers`,
       geminiResults.length > 0 ? 'success' : 'warning'
     );
     
@@ -549,7 +606,7 @@ export async function runStealthExtraction(
         linkedInData.length > 0 ? 'success' : 'warning'
       );
       
-      // Merge LinkedIn data with Gemini results
+      // Merge LinkedIn data with model-extracted results
       linkedInData.forEach(liStakeholder => {
         const existing = geminiResults.find(g => 
           g.name.toLowerCase().includes(liStakeholder.name?.toLowerCase() || '') ||

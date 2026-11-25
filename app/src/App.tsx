@@ -7,6 +7,8 @@ import React, { useState, useEffect, Suspense, lazy, useRef, useCallback } from 
 import AdminDashboard from './AdminDashboard';
 import { landingTranslations } from './landing/landingTranslations';
 import { JinEmployeeDashboard } from './components/JinEmployeeDashboard';
+import { JinWorkingPane } from './components/JinWorkingPane';
+import { CampaignBoard } from './components/CampaignBoard';
 // Task 2G: Lazy load LandingPage for performance
 const LandingPage = lazy(() => import('./landing/LandingPage').then(m => ({ default: m.LandingPage })));
 
@@ -1429,7 +1431,7 @@ function AppContent() {
     }
   };
 
-  const handleCreateQuotation = async (data: { items: any[]; notes: string; currency: string; vat_rate: number; valid_days: number }) => {
+  const handleCreateQuotation = async () => {
     if (!selectedLead) return;
     setQuotationLoading(true);
     try {
@@ -1437,16 +1439,16 @@ function AppContent() {
         method: 'POST',
         body: JSON.stringify({
           lead_id: selectedLead.lead_id,
-          items: data.items,
-          notes: data.notes,
-          valid_days: data.valid_days,
-          currency: data.currency,
-          vat_rate: data.vat_rate,
+          items: quotationItems.filter(i => i.label.trim()),
+          notes: quotationNotes,
+          valid_days: parseInt(quotationValidDays) || 30,
+          currency: 'SAR',
+          vat_rate: 15,
         })
       });
-      const result = await res.json();
-      if (result.status === 'created') {
-        setNotification({ message: `Quotation #${result.invoice_id} created — Total: SAR ${result.total.toLocaleString()}`, type: 'success' });
+      const data = await res.json();
+      if (data.status === 'created') {
+        setNotification({ message: `Quotation #${data.invoice_id} created — Total: SAR ${data.total.toLocaleString()}`, type: 'success' });
         const qRes = await authFetch(`/api/quotations/${selectedLead.lead_id}`);
         setQuotations(await qRes.json());
       }
@@ -2280,11 +2282,15 @@ function AppContent() {
 
       {/* Jin AI Employee Status */}
       {authToken && (
-        <JinEmployeeDashboard 
-          isOpen={showJinPanel}
-          onToggle={() => setShowJinPanel(!showJinPanel)}
-          authToken={authToken}
-        />
+        <>
+          <JinEmployeeDashboard
+            isOpen={showJinPanel}
+            onToggle={() => setShowJinPanel(!showJinPanel)}
+            authToken={authToken}
+          />
+          <JinWorkingPane authToken={authToken} language={language} />
+          <CampaignBoard authToken={authToken} />
+        </>
       )}
 
       {/* Trial Banner */}
@@ -4529,21 +4535,14 @@ function AppContent() {
                   </div>
                 ) : (
                   <div className="space-y-8 md:space-y-12">
-                    {(() => {
-                      // DB-loaded leads return outreach_sequence as a raw JSON string; harvested
-                      // leads already hold an object. Parse only the string case so both render.
-                      const rawSeq: any = selectedLead.outreach_sequence;
-                      const seq: any = typeof rawSeq === 'string'
-                        ? (() => { try { return JSON.parse(rawSeq); } catch { return null; } })()
-                        : rawSeq;
-                      return seq ? (
+                    {selectedLead.outreach_sequence ? (
                       <>
                         {[
                           { key: 'day0', label: 'Day 0: Pattern Interrupt', border: 'border-app-accent' },
                           { key: 'day3', label: 'Day 3: Value Drop', border: 'border-app-accent/60' },
                           { key: 'day7', label: 'Day 7: Break-up', border: 'border-app-accent/30' },
                         ].map(({ key, label, border }) => {
-                          const parsed = parseOutreach((seq as any)?.[key]);
+                          const parsed = parseOutreach((selectedLead.outreach_sequence as any)?.[key]);
                           return (
                             <div key={key} className="space-y-4 md:space-y-6">
                               <h4 className="text-[9px] md:text-[10px] font-bold uppercase tracking-[0.4em] opacity-40">{label}</h4>
@@ -4554,11 +4553,11 @@ function AppContent() {
                             </div>
                           );
                         })}
-                        {seq.majlis_version && (
+                        {selectedLead.outreach_sequence.majlis_version && (
                           <div className="space-y-4 md:space-y-6">
                             <h4 className="text-[9px] md:text-[10px] font-bold uppercase tracking-[0.4em] text-app-accent">{t.majlisVersion}</h4>
                             <div className="p-5 md:p-8 glass rounded-3xl text-[11px] md:text-sm font-mono leading-relaxed whitespace-pre-wrap border-l-2 border-app-accent bg-app-accent/5">
-                              {seq.majlis_version}
+                              {selectedLead.outreach_sequence.majlis_version}
                             </div>
                           </div>
                         )}
@@ -4568,8 +4567,7 @@ function AppContent() {
                         <AlertCircle className="w-12 h-12 md:w-16 md:h-16" strokeWidth={1} />
                         <p className="text-[10px] md:text-sm uppercase font-bold tracking-widest">Sequence only available for HOT leads</p>
                       </div>
-                      );
-                    })()}
+                    )}
                   </div>
                 )}
 
@@ -4691,13 +4689,7 @@ function AppContent() {
                     <div className="flex justify-between items-center">
                       <h4 className="text-[9px] md:text-[10px] font-bold uppercase tracking-[0.4em] opacity-40">Custom Quotation Builder</h4>
                       <button
-                        onClick={() => handleCreateQuotation({
-                          items: quotationItems.filter(i => i.label.trim()),
-                          notes: quotationNotes,
-                          currency: 'SAR',
-                          vat_rate: 15,
-                          valid_days: parseInt(quotationValidDays) || 30,
-                        })}
+                        onClick={handleCreateQuotation}
                         disabled={quotationLoading}
                         className="flex items-center gap-2 px-4 py-2 bg-app-accent text-app-bg rounded-full text-[10px] font-bold uppercase tracking-widest hover:scale-105 transition-all disabled:opacity-50"
                       >
@@ -5158,17 +5150,6 @@ function AppWithLanding() {
   const [companySaving, setCompanySaving] = useState(false);
   const [companyError, setCompanyError] = useState('');
 
-  // Local email + password auth for unauthenticated users.
-  // LeadJin must not depend on Google sign-in: this modal is the primary path.
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot' | 'reset'>('login');
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState('');
-  const [authSuccess, setAuthSuccess] = useState('');
-
   useEffect(() => {
     // Check for auth token
     const token = localStorage.getItem('leadjin_token');
@@ -5195,18 +5176,6 @@ function AppWithLanding() {
       });
     } else {
       setAuthChecked(true);
-    }
-  }, []);
-
-  // Handle ?reset=token from the password-reset link — open the reset form directly
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const resetToken = params.get('reset');
-    if (resetToken) {
-      setAuthMode('reset');
-      setAuthEmail(resetToken);
-      setShowAuthModal(true);
-      window.history.replaceState({}, '', '/');
     }
   }, []);
 
@@ -5248,68 +5217,16 @@ function AppWithLanding() {
     return () => window.removeEventListener('message', handleGoogleLogin);
   }, []);
 
-  // Local email + password auth — the primary sign-in path (no Google required)
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError('');
-    setAuthSuccess('');
-    setAuthLoading(true);
-    try {
-      if (authMode === 'forgot') {
-        await fetch('/api/auth/forgot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authEmail }) });
-        setAuthSuccess('If that email exists, a reset link has been sent.');
-        setAuthLoading(false);
-        return;
-      }
-      if (authMode === 'reset') {
-        const res = await fetch('/api/auth/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: authEmail, password: authPassword }) });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Reset failed');
-        setAuthSuccess('Password updated. Please sign in.');
-        setAuthMode('login');
-        setAuthEmail('');
-        setAuthPassword('');
-        setAuthLoading(false);
-        return;
-      }
-      if (authMode === 'register' && authPassword !== authConfirmPassword) {
-        setAuthError('Passwords do not match.');
-        setAuthLoading(false);
-        return;
-      }
-      const res = await fetch(`/api/auth/${authMode}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: authEmail, password: authPassword })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Authentication failed');
-      try { localStorage.setItem('leadjin_token', data.token); } catch (e) {}
-      setHasAuth(true);
-      setShowDashboard(true);
-      setShowAuthModal(false);
-    } catch (error: any) {
-      setAuthError(error.message || 'Something went wrong. Please try again.');
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  // Optional secondary path — kept available, not required
-  const handleGoogleSignIn = () => {
+  const handleEnterApp = () => {
+    // Start Google OAuth flow
     fetch('/api/auth/google')
       .then(r => r.json())
       .then(data => {
-        if (data.url) window.open(data.url, 'google_auth', 'width=500,height=620,left=400,top=100');
+        if (data.url) {
+          window.open(data.url, 'google_auth', 'width=500,height=620,left=400,top=100');
+        }
       })
-      .catch(() => {});
-  };
-
-  const handleEnterApp = () => {
-    setAuthMode('login');
-    setAuthError('');
-    setAuthSuccess('');
-    setShowAuthModal(true);
+      .catch(() => setShowDashboard(true));
   };
 
   // Show loading while checking auth
@@ -5321,95 +5238,16 @@ function AppWithLanding() {
     );
   }
 
-  // Show landing page for unauthenticated users (with a local email+password login modal)
+  // Show landing page for unauthenticated users
   if (!showDashboard && !hasAuth) {
     return (
-      <>
-        <Suspense fallback={
-          <div className="min-h-screen flex items-center justify-center bg-app-bg text-app-text">
-            <div className="animate-pulse text-sm opacity-50">Loading...</div>
-          </div>
-        }>
-          <LandingPage onEnterApp={handleEnterApp} />
-        </Suspense>
-        <AnimatePresence>
-          {showAuthModal && (
-            <motion.div
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
-              onClick={() => setShowAuthModal(false)}
-            >
-              <motion.div
-                initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
-                className="glass rounded-[32px] p-8 w-full max-w-sm space-y-6"
-                onClick={e => e.stopPropagation()}
-              >
-                <div className="space-y-1">
-                  <h2 className="text-xl font-light">
-                    {authMode === 'login' ? 'Sign In' : authMode === 'register' ? 'Create Account' : authMode === 'forgot' ? 'Reset Password' : 'New Password'}
-                  </h2>
-                  <p className="text-xs opacity-40">
-                    {authMode === 'login' ? 'Access your LEADJIN workspace.' : authMode === 'register' ? 'Start your free account — no credit card needed.' : authMode === 'forgot' ? "Enter your email and we'll send a reset link." : 'Enter your new password.'}
-                  </p>
-                </div>
-                <form onSubmit={handleAuthSubmit} className="space-y-4">
-                  {authMode !== 'reset' && (
-                    <input
-                      type="email" placeholder="Email address" required
-                      value={authEmail} onChange={e => setAuthEmail(e.target.value)}
-                      className="w-full glass rounded-2xl px-5 py-4 text-sm outline-none focus:border-app-accent transition-all"
-                    />
-                  )}
-                  {(authMode === 'login' || authMode === 'register' || authMode === 'reset') && (
-                    <input
-                      type="password" placeholder={authMode === 'reset' ? 'New password' : 'Password'} required
-                      value={authPassword} onChange={e => setAuthPassword(e.target.value)}
-                      className="w-full glass rounded-2xl px-5 py-4 text-sm outline-none focus:border-app-accent transition-all"
-                    />
-                  )}
-                  {authMode === 'register' && (
-                    <input
-                      type="password" placeholder="Confirm password" required
-                      value={authConfirmPassword} onChange={e => setAuthConfirmPassword(e.target.value)}
-                      className="w-full glass rounded-2xl px-5 py-4 text-sm outline-none focus:border-app-accent transition-all"
-                    />
-                  )}
-                  {authError && <p className="text-xs text-red-400">{authError}</p>}
-                  {authSuccess && <p className="text-xs text-emerald-400">{authSuccess}</p>}
-                  <button
-                    type="submit" disabled={authLoading}
-                    className="w-full py-4 bg-app-accent text-white rounded-2xl text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-opacity disabled:opacity-50"
-                  >
-                    {authLoading ? 'Please wait...' : authMode === 'login' ? 'Sign In' : authMode === 'register' ? 'Create Account' : authMode === 'forgot' ? 'Send Reset Link' : 'Set New Password'}
-                  </button>
-                  {authMode === 'login' && (
-                    <button
-                      type="button" onClick={handleGoogleSignIn}
-                      className="w-full py-3 border border-white/10 rounded-2xl text-xs font-bold uppercase tracking-widest opacity-70 hover:opacity-100 transition-opacity"
-                    >
-                      Continue with Google (optional)
-                    </button>
-                  )}
-                </form>
-                <div className="flex justify-between text-xs opacity-40">
-                  {authMode === 'login' && (
-                    <>
-                      <button onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthSuccess(''); }} className="hover:text-app-accent transition-colors">Forgot password?</button>
-                      <button onClick={() => { setAuthMode('register'); setAuthError(''); setAuthSuccess(''); }} className="text-app-accent hover:underline">Sign up</button>
-                    </>
-                  )}
-                  {authMode === 'register' && (
-                    <button onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); }} className="mx-auto text-app-accent hover:underline">Already have an account? Sign in</button>
-                  )}
-                  {(authMode === 'forgot' || authMode === 'reset') && (
-                    <button onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); }} className="mx-auto hover:text-app-accent transition-colors">Back to sign in</button>
-                  )}
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </>
+      <Suspense fallback={
+        <div className="min-h-screen flex items-center justify-center bg-app-bg text-app-text">
+          <div className="animate-pulse text-sm opacity-50">Loading...</div>
+        </div>
+      }>
+        <LandingPage onEnterApp={handleEnterApp} />
+      </Suspense>
     );
   }
 

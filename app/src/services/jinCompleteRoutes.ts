@@ -28,6 +28,7 @@ import {
   saveStakeholder,
   getStakeholdersByDomain
 } from './jinLedger.js';
+import { getGenAI } from './genaiClient.js';
 import {
   verifyEmailSMTP,
   verifyPhoneHLR,
@@ -52,6 +53,18 @@ import {
   addOutreachHistory,
   addStakeholderNote
 } from './jinLedgerEnhanced.js';
+
+// ---------------------------------------------------------------------------
+// Jin chat endpoint
+// ---------------------------------------------------------------------------
+
+/** Clean raw model prose for human-facing display (strip code fences, trim). */
+function cleanModelText(text: string): string {
+  let t = text.trim();
+  t = t.replace(/^```[a-zA-Z0-9_-]*\n?/gm, '').trim();
+  t = t.replace(/\n?```$/gm, '').trim();
+  return t;
+}
 
 export function createCompleteJinRouter(
   db: Database.Database,
@@ -80,7 +93,7 @@ export function createCompleteJinRouter(
     if (userRecord?.gemini_api_key) {
       apiKey = userRecord.gemini_api_key;
     }
-    return apiKey;
+    return apiKey ?? null;
   };
 
   // ============================================================================
@@ -95,10 +108,9 @@ export function createCompleteJinRouter(
     if (!domain) return res.status(400).json({ error: 'Domain is required' });
 
     const apiKey = getGeminiKey(req, user);
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured' });
 
     const config: JinExtractionConfig = {
-      geminiApiKey: apiKey,
+      geminiApiKey: apiKey ?? '',
       headless: true,
       maxStakeholders: 3,
       verifyEmails,
@@ -276,7 +288,6 @@ export function createCompleteJinRouter(
     if (!user) return;
 
     const apiKey = getGeminiKey(req, user);
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured' });
 
     const { stakeholder, sender, context } = req.body;
     if (!stakeholder || !sender) {
@@ -288,7 +299,7 @@ export function createCompleteJinRouter(
         stakeholder,
         sender,
         context || {},
-        apiKey
+        apiKey ?? ''
       );
 
       // Save to outreach history
@@ -493,9 +504,8 @@ export function createCompleteJinRouter(
     if (!user) return;
 
     const apiKey = getGeminiKey(req, user);
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured' });
 
-    const brain = new JinBrain(apiKey);
+    const brain = new JinBrain(apiKey ?? '');
     const { lead } = req.body;
 
     if (!lead) return res.status(400).json({ error: 'lead data required' });
@@ -524,9 +534,8 @@ export function createCompleteJinRouter(
     if (!user) return;
 
     const apiKey = getGeminiKey(req, user);
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured' });
 
-    const brain = new JinBrain(apiKey);
+    const brain = new JinBrain(apiKey ?? '');
     const { lead, context } = req.body;
 
     try {
@@ -542,9 +551,8 @@ export function createCompleteJinRouter(
     if (!user) return;
 
     const apiKey = getGeminiKey(req, user);
-    if (!apiKey) return res.status(503).json({ error: 'Gemini API key not configured' });
 
-    const brain = new JinBrain(apiKey);
+    const brain = new JinBrain(apiKey ?? '');
     const { entityName, industry } = req.body;
 
     if (!entityName) return res.status(400).json({ error: 'Entity name required' });
@@ -576,16 +584,28 @@ export function createCompleteJinRouter(
     }
 
     // --- Local model gate (NO Gemini / Vertex / WATHQ) ---
+    // LOCAL mode is the default: LEADJIN_PROVIDER=ollama drives the
+    // provider-agnostic genaiClient at src/services/genaiClient.ts, which
+    // dispatches to local Ollama gemma4:e4b. An explicit local path
+    // (LOCAL_MODEL_PATH / OLLAMA_MODEL) takes precedence over the env default.
     const localModelPath = process.env.LOCAL_MODEL_PATH || process.env.OLLAMA_MODEL || null;
-    const isLocal = !!localModelPath;
+    const isLocal = localModelPath !== null || process.env.LEADJIN_PROVIDER === 'ollama';
 
     let reply: string;
     let source: string;
 
     if (isLocal) {
-      // A local model path is configured — would call it here.
-      reply = `[Jin] Local model "${localModelPath}" is configured but not yet invoked. Your message: "${message}".`;
-      source = 'local_stub';
+      // A local model is configured — invoke it through the provider-agnostic
+      // genaiClient (LOCAL mode → Ollama gemma4:e4b). No Gemini / Vertex /
+      // WATHQ keys are consulted here.
+      const ai = getGenAI();
+      const aiResponse = await ai.models.generateContent({
+        model: localModelPath || undefined,
+        contents: message,
+        config: { temperature: 0.2, maxTokens: 1024 },
+      });
+      reply = cleanModelText(aiResponse.text || '[Jin] (no reply from local model)');
+      source = 'local';
     } else {
       // No local model available — stub using existing Jin verify/status data.
       const jinStatus = getEnhancedJinStatus(db);

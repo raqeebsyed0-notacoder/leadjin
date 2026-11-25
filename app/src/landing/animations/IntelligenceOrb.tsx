@@ -45,7 +45,15 @@ export const IntelligenceOrb: React.FC<IntelligenceOrbProps> = ({ darkMode }) =>
     camera.position.z = 4;
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    } catch (err) {
+      // WebGL is unavailable (blocked GPU / headless). The orb is decorative,
+      // so skip all GL work and leave the container in place rather than throw
+      // into the app-wide ErrorBoundary.
+      return;
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(w, h);
     renderer.setClearColor(0x000000, 0);
@@ -183,7 +191,12 @@ export const IntelligenceOrb: React.FC<IntelligenceOrbProps> = ({ darkMode }) =>
         pos.needsUpdate = true;
       }
 
-      renderer.render(scene, camera);
+      try {
+        renderer.render(scene, camera);
+      } catch (err) {
+        // WebGL context failed or was lost mid-frame: stop the loop quietly.
+        return;
+      }
       animId = requestAnimationFrame(animate);
     };
 
@@ -194,7 +207,11 @@ export const IntelligenceOrb: React.FC<IntelligenceOrbProps> = ({ darkMode }) =>
       const ch = container.clientHeight;
       camera.aspect = cw / ch;
       camera.updateProjectionMatrix();
-      renderer.setSize(cw, ch);
+      try {
+        renderer.setSize(cw, ch);
+      } catch (err) {
+        // Ignore resize after a WebGL context failure.
+      }
     };
 
     window.addEventListener('resize', resize);
@@ -207,7 +224,11 @@ export const IntelligenceOrb: React.FC<IntelligenceOrbProps> = ({ darkMode }) =>
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
-      renderer.dispose();
+      try {
+        renderer.dispose();
+      } catch (err) {
+        // Context may already be lost; disposal is best-effort.
+      }
     };
   }, []);
 

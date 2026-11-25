@@ -5,14 +5,20 @@
  * Mines X/Twitter, TikTok, and Snapchat bios to find email, phone,
  * WhatsApp, and LinkedIn URLs for Saudi B2B leads.
  *
- * Uses Gemini 2.5 Flash with Google Search grounding to search across
+ * Uses the configured local model with web-grounded search to scan
  * social platforms in a single query (Arabic + English).
  *
  * PRIVACY RULE: Personal social handles are used during mining but are
  * NOT included in the return type. Only company handles are returned.
+ *
+ * FIND legs (source provenance): this service is the public social-scan leg
+ * (FIND-4 — social platforms + company website). It extracts contact fields
+ * for the discovery waterfall; it emits no evidence URL and never sets
+ * verified_real. That flag belongs to the huntOrchestrator five-field gate
+ * (email, person name, company name, linkedin, hq_city) AND evidence_urls.
  */
 
-import { GoogleGenAI } from "@google/genai";
+
 import { getGenAI } from "./genaiClient.js";
 
 // ---------------------------------------------------------------------------
@@ -97,7 +103,7 @@ export async function mineSocialProfiles(
 
   const domainHint = domain ? `Their website is ${domain}.` : "";
 
-  // Single Gemini query that searches all platforms + company website for PERSONAL contact info
+  // Single grounded model query across all platforms + company website for PERSONAL contact info
   const prompt = `Search the internet to find PERSONAL contact details for this specific person at a Saudi company.
 
 TARGET PERSON: ${name}
@@ -146,7 +152,7 @@ COMPANY_TIKTOK: [@handle or NOT_FOUND]`;
 
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "fast",
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
@@ -160,7 +166,7 @@ COMPANY_TIKTOK: [@handle or NOT_FOUND]`;
       const text = response.text || "";
 
       if (!text || text.length < 20) {
-        console.warn("[SocialIntelligence] Empty response from Gemini");
+        console.warn("[SocialIntelligence] Empty response from the configured model");
         if (attempt < MAX_RETRIES) {
           attempt++;
           console.log(`[SocialIntelligence] Retry ${attempt}/${MAX_RETRIES} for ${name} at ${company}`);
@@ -172,7 +178,7 @@ COMPANY_TIKTOK: [@handle or NOT_FOUND]`;
 
       const parsed = parseGeminiResponse(text);
 
-      // LinkedIn fallback via DuckDuckGo if Gemini didn't find one
+      // LinkedIn fallback via DuckDuckGo if the model didn't find one
       if (!parsed.linkedinUrl && name && company) {
         try {
           const ddgUrl = `https://html.duckduckgo.com/html/?q=site:linkedin.com/in+"${encodeURIComponent(name)}"+"${encodeURIComponent(company)}"`;
@@ -203,7 +209,7 @@ COMPANY_TIKTOK: [@handle or NOT_FOUND]`;
         continue;
       }
 
-      console.error("[SocialIntelligence] Gemini query failed:", err.message);
+      console.error("[SocialIntelligence] Model query failed:", err.message);
       return emptyResult;
     }
   }
@@ -400,7 +406,7 @@ function normalizePhone(phone: string): string {
 }
 
 /**
- * Extract a social handle from Gemini's response text.
+ * Extract a social handle from the model's response text.
  * Handles formats like: @handle, https://x.com/handle, NOT_FOUND
  */
 function extractHandle(text: string): string | null {
