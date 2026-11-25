@@ -3367,6 +3367,8 @@ app.post("/api/leads/recalculate-scores", (req, res) => {
 // --- LeadJin Hunter Module — Strategic Entity Discovery ---
 // POST /api/hunt - Discover executives via LinkedIn intelligence
 app.post("/api/hunt", async (req, res) => {
+  const user = getUserFromTokenCached(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required' });
   const { domain, linkedinCookie, maxExecutives } = req.body;
   
   if (!domain || typeof domain !== "string") {
@@ -3400,6 +3402,8 @@ app.post("/api/hunt", async (req, res) => {
 // Both routes are open (no auth) — mirrors /api/hunt pattern.
 // D11: national IDs are never returned.
 app.get("/api/wathq/:cr", async (req, res) => {
+  const user = getUserFromTokenCached(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required' });
   const { cr } = req.params;
   const lang = (req.query.lang === 'ar' || req.query.lang === 'en') ? req.query.lang : 'en';
 
@@ -3423,6 +3427,8 @@ app.get("/api/wathq/:cr", async (req, res) => {
 });
 
 app.post("/api/hunt-wathq", async (req, res) => {
+  const user = getUserFromTokenCached(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required' });
   const { cr, lang } = req.body;
   const resolvedLang = (lang === 'ar' || lang === 'en') ? lang : 'en';
 
@@ -3457,6 +3463,8 @@ app.post("/api/hunt-wathq", async (req, res) => {
 //   crs    — optional: skip auto-discovery, supply known CR numbers directly
 // Open route (no JWT) — mirrors /api/hunt and /api/hunt-wathq pattern.
 app.post("/api/hunt-orchestrate", async (req, res) => {
+  const user = getUserFromTokenCached(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required' });
   const { sector, geo, count, crs } = req.body as OrchestrateInput & { crs?: string[] };
 
   if (!sector || typeof sector !== 'string' || !sector.trim()) {
@@ -3667,6 +3675,8 @@ function addUnsubscribeFooter(body: string, toEmail: string): string {
 }
 // Mail account routes
 app.get("/api/mail/accounts", (req, res) => {
+  const user = getUserFromTokenCached(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required' });
   const userId = parseInt(req.query.user_id as string) || undefined;
   if (userId !== undefined) {
     const row = db.prepare("SELECT id, address, smtp_host, created_at FROM mail_accounts WHERE user_id = ?").get(userId) as any;
