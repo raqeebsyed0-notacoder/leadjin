@@ -4361,8 +4361,8 @@ app.post("/api/leads/sync", (req, res) => {
   let skippedDuplicates = 0;
   
   const insert = db.prepare(`
-    INSERT OR REPLACE INTO leads (lead_id, name, title, company, email, linkedin, industry, lead_score, vision_2030_score, vision_2030_program, vision_2030_alignment, user_id, stage_entered_at, email_verified, email_source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT stage_entered_at FROM leads WHERE lead_id = ?), CURRENT_TIMESTAMP), ?, ?)
+    INSERT OR REPLACE INTO leads (lead_id, name, title, company, email, linkedin, industry, lead_score, vision_2030_score, vision_2030_program, vision_2030_alignment, user_id, stage_entered_at, email_verified, email_source, meeting_ready)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT stage_entered_at FROM leads WHERE lead_id = ?), CURRENT_TIMESTAMP), ?, ?, ?)
   `);
   
   const checkDuplicate = db.prepare(`
@@ -4400,9 +4400,9 @@ app.post("/api/leads/sync", (req, res) => {
         JSON.stringify(lead.vision_2030_alignment || {}),
         user.id,
         leadId,
-        meetingReady,
         lead.email_verified ? 1 : 0,
-        lead.email_source || 'ai'
+        lead.email_source || 'ai',
+        meetingReady
       );
       
       syncedCount++;
