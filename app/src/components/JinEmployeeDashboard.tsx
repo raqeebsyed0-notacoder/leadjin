@@ -1,711 +1,384 @@
 /**
- * Enhanced Jin Employee Dashboard
- * 
- * Complete UI for all Jin modules:
- * - Module 2: Extraction
- * - Module 3: Verification
- * - Module 4: Outreach
- * - Module 5: KPI & Work Log
+ * Jin — floating chat box (chat only).
+ *
+ * The six-tab employee dashboard is gone. What remains is one floating,
+ * chat-only surface with four explicit states: idle (launcher), empty
+ * (no messages yet), working (live progress) and error (retryable).
+ *
+ * Live progress consumes the stream.ts event vocabulary. In the browser the
+ * bus is reached through the SSE endpoint; every `event:` name is one of
+ * STREAM_KINDS and every `data:` payload is a StreamEvent. When that endpoint
+ * is absent the chat round trip still drives the same working indicator.
+ *
+ * Palette: only --app-bg / --app-text / --app-accent / --app-surface /
+ * --app-border and opacity of those tokens. No new hue, no logo changes.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import {
-  Bot,
-  Activity,
-  Clock,
-  CheckCircle,
-  AlertCircle,
-  Search,
-  Loader2,
-  ChevronDown,
-  ChevronUp,
-  Building2,
-  User,
-  Mail,
-  Shield,
-  TrendingUp,
-  Briefcase,
-  Phone,
-  MapPin,
-  Send,
-  BarChart3,
-  FileText,
-  RefreshCw,
-  Zap,
-  Eye,
-  Hand,
-  Mic
-} from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { AlertCircle, Bot, Loader2, RotateCcw, Send, X } from 'lucide-react';
+import { STREAM_KINDS, type StreamEvent } from '../services/stream';
+import { renderJinContent } from './JinMessageRenderer';
+
+type Language = 'en' | 'ar';
 
 interface JinDashboardProps {
   authToken: string;
   isOpen: boolean;
   onToggle: () => void;
+  t?: any;
+  language?: Language;
+  companyProfile?: { name?: string; tagline?: string };
+  targetIndustry?: string;
+  majlisModeEnabled?: boolean;
 }
 
-type TabType = 'overview' | 'extraction' | 'verification' | 'outreach' | 'kpi';
+type Message = {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  tone?: 'error';
+};
+
+type StreamState =
+  | { kind: 'idle' }
+  | { kind: 'working'; label: string; progress: number | null }
+  | { kind: 'error'; message: string };
+
+const COPY = {
+  en: {
+    open: 'Open Jin chat',
+    close: 'Close chat',
+    title: 'Jin',
+    subtitle: 'Lead intelligence assistant',
+    available: 'Available',
+    working: 'Working',
+    label: 'Message Jin',
+    placeholder: 'Ask about your leads, outreach or pipeline…',
+    send: 'Send',
+    empty: 'Ask Jin a question to get started.',
+    suggestion: 'Show me today’s highest-value leads',
+    workingNow: 'Jin is working…',
+    errorTitle: 'That request did not complete.',
+    errorHint: 'Your message is still here. Try again.',
+    retry: 'Retry',
+    detailsSaved: 'Jin saved the structured details to your workspace.',
+  },
+  ar: {
+    open: 'فتح محادثة جين',
+    close: 'إغلاق المحادثة',
+    title: 'جين',
+    subtitle: 'مساعد ذكاء العملاء المحتملين',
+    available: 'متاح',
+    working: 'يعمل الآن',
+    label: 'رسالة إلى جين',
+    placeholder: 'اسأل عن العملاء أو التواصل أو خط الأنابيب…',
+    send: 'إرسال',
+    empty: 'اسأل جين سؤالاً للبدء.',
+    suggestion: 'أرني أهم العملاء اليوم',
+    workingNow: 'جين يعمل الآن…',
+    errorTitle: 'لم يكتمل هذا الطلب.',
+    errorHint: 'رسالتك ما زالت هنا. حاول مرة أخرى.',
+    retry: 'إعادة المحاولة',
+    detailsSaved: 'حفظ جين التفاصيل المنظمة في مساحة العمل.',
+  },
+} as const;
+
+/** A fenced block or a bare JSON payload must never reach the transcript. */
+function isStructured(text: string): boolean {
+  const value = text.trim();
+  if (!value) return false;
+  if (/^```/.test(value)) return true;
+  const wrapped =
+    (value.startsWith('{') && value.endsWith('}')) ||
+    (value.startsWith('[') && value.endsWith(']'));
+  if (!wrapped) return false;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Renderable prose only: strip fences, inline code ticks and raw JSON. */
+function cleanProse(raw: unknown, lang: Language): string {
+  const fallback = COPY[lang].detailsSaved;
+  const text = String(raw ?? '').replace(/\r/g, '');
+  const withoutFences = text.replace(
+    /```[a-z0-9_-]*\n?([\s\S]*?)```/gi,
+    (_whole, body: string) => {
+      const inner = String(body ?? '').trim();
+      if (!inner) return '';
+      return isStructured(inner) ? fallback : inner;
+    }
+  );
+  return withoutFences
+    .split('\n')
+    .map((line) => (isStructured(line) ? fallback : line))
+    .join('\n')
+    .replace(/`+/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 const JinEmployeeDashboard: React.FC<JinDashboardProps> = ({
   authToken,
   isOpen,
-  onToggle
+  onToggle,
+  language = 'en',
 }) => {
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
-  const [status, setStatus] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [domainInput, setDomainInput] = useState('');
-  const [companyInput, setCompanyInput] = useState('');
-  const [isExtracting, setIsExtracting] = useState(false);
-  const [extractionJobId, setExtractionJobId] = useState<string | null>(null);
-  const [stakeholders, setStakeholders] = useState<any[]>([]);
-  const [selectedStakeholder, setSelectedStakeholder] = useState<any>(null);
-  const [verificationResult, setVerificationResult] = useState<any>(null);
-  const [outreachDraft, setOutreachDraft] = useState<any>(null);
-  const [kpiReport, setKpiReport] = useState<any>(null);
+  const lang: Language = language === 'ar' ? 'ar' : 'en';
+  const copy = COPY[lang];
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [stream, setStream] = useState<StreamState>({ kind: 'idle' });
+  const [lastSent, setLastSent] = useState<string | null>(null);
+  const nextId = useRef(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const response = await fetch('/api/jin/status', {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setStatus(data);
-      }
-    } catch (error) {
-      console.error('[Jin] Failed to fetch status:', error);
-    }
-  }, [authToken]);
+  const working = sending || stream.kind === 'working';
+  const streamError = stream.kind === 'error' ? stream.message : null;
+  const workingLabel =
+    stream.kind === 'working' ? stream.label || copy.workingNow : copy.workingNow;
+  const workingProgress = stream.kind === 'working' ? stream.progress : null;
 
-  // Initial fetch
-  useEffect(() => {
-    if (authToken && isOpen) {
-      fetchStatus();
-      const interval = setInterval(fetchStatus, 5000);
-      return () => clearInterval(interval);
-    }
-  }, [authToken, isOpen, fetchStatus]);
+  const append = useCallback((message: Omit<Message, 'id'>) => {
+    nextId.current += 1;
+    setMessages((prev) => [...prev, { ...message, id: nextId.current }]);
+  }, []);
 
-  // Handle extraction
-  const handleStartExtraction = async () => {
-    if (!domainInput.trim()) return;
+  const sendMessage = useCallback(
+    async (raw: string) => {
+      const text = raw.trim();
+      if (!text || sending) return; // one submit in flight, guarded in the handler
+      setSending(true);
+      setLastSent(text);
+      setDraft('');
+      setStream({ kind: 'idle' });
+      append({ role: 'user', content: cleanProse(text, lang) });
 
-    setIsExtracting(true);
-    try {
-      const response = await fetch('/api/jin/extract', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({
-          domain: domainInput.trim(),
-          companyName: companyInput.trim() || undefined
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setExtractionJobId(data.jobId);
-        setDomainInput('');
-        setCompanyInput('');
-      } else {
-        const error = await response.json();
-        alert(error.error || 'Failed to start extraction');
-        setIsExtracting(false);
-      }
-    } catch (error: any) {
-      console.error('[Jin] Extraction failed:', error);
-      setIsExtracting(false);
-    }
-  };
-
-  // Fetch stakeholders
-  const fetchStakeholders = async (domain?: string) => {
-    try {
-      const url = domain 
-        ? `/api/jin/stakeholders?domain=${encodeURIComponent(domain)}`
-        : '/api/jin/stakeholders';
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setStakeholders(data.stakeholders || []);
-      }
-    } catch (error) {
-      console.error('[Jin] Failed to fetch stakeholders:', error);
-    }
-  };
-
-  // Perform triple-check verification
-  const performVerification = async (stakeholder: any) => {
-    setIsLoading(true);
-    try {
-      const response = await fetch('/api/jin/verify/triple-check', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({
-          stakeholderId: stakeholder.id,
-          email: stakeholder.email,
-          phone: stakeholder.phone,
-          domain: stakeholder.domain,
-          companyName: stakeholder.company,
-          claimedLocation: 'Riyadh, Saudi Arabia' // Would come from stakeholder data
-        })
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        setVerificationResult(result);
-      }
-    } catch (error) {
-      console.error('[Jin] Verification failed:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Generate outreach
-  const generateOutreach = async (stakeholder: any) => {
-    setIsLoading(true);
-    try {
-      const response = await fetch('/api/jin/outreach/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({
-          stakeholder,
-          sender: {
-            companyName: 'Euphoria Vision',
-            services: ['AI Solutions', 'Digital Transformation', 'Strategic Consulting']
+      try {
+        const response = await fetch('/api/jin/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
           },
-          context: {
-            targetIndustry: 'Technology',
-            majlisMode: true
+          body: JSON.stringify({ message: text }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json().catch(() => ({}));
+        append({
+          role: 'assistant',
+          content: cleanProse(data?.reply ?? copy.errorTitle, lang),
+        });
+      } catch {
+        append({ role: 'assistant', content: copy.errorTitle, tone: 'error' });
+      } finally {
+        setSending(false);
+        inputRef.current?.focus();
+      }
+    },
+    [append, authToken, copy.errorTitle, lang, sending]
+  );
+
+  const retry = useCallback(() => {
+    setStream({ kind: 'idle' });
+    if (lastSent) void sendMessage(lastSent);
+  }, [lastSent, sendMessage]);
+
+  // stream.ts events arrive as SSE blocks named after STREAM_KINDS.
+  const applyStreamEvent = useCallback(
+    (event: StreamEvent) => {
+      switch (event.kind) {
+        case 'start':
+          setStream({ kind: 'working', label: event.name || copy.workingNow, progress: 0 });
+          break;
+        case 'step': {
+          const count = event.total ? `${event.step}/${event.total}` : `${event.step}`;
+          setStream({
+            kind: 'working',
+            label: event.label ? `${event.label} · ${count}` : count,
+            progress: null,
+          });
+          break;
+        }
+        case 'progress':
+          setStream((prev) => ({
+            kind: 'working',
+            label: event.detail || (prev.kind === 'working' ? prev.label : copy.workingNow),
+            progress: Math.max(0, Math.min(100, Math.round(event.progress))),
+          }));
+          break;
+        case 'done':
+          setStream({ kind: 'idle' });
+          if (typeof event.result === 'string' && event.result.trim()) {
+            append({ role: 'assistant', content: cleanProse(event.result, lang) });
+          } else if (!event.ok) {
+            append({ role: 'assistant', content: copy.errorTitle, tone: 'error' });
           }
-        })
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        setOutreachDraft(result);
+          break;
+        case 'error':
+          setStream({ kind: 'error', message: cleanProse(event.message || event.error, lang) });
+          break;
       }
-    } catch (error) {
-      console.error('[Jin] Outreach generation failed:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    },
+    [append, copy.errorTitle, copy.workingNow, lang]
+  );
 
-  // Fetch KPI report
-  const fetchKPIReport = async () => {
+  useEffect(() => {
+    if (!isOpen || !authToken || typeof EventSource === 'undefined') return;
+    let source: EventSource;
     try {
-      const response = await fetch('/api/jin/kpi/report?period=weekly', {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setKpiReport(data);
-      }
-    } catch (error) {
-      console.error('[Jin] Failed to fetch KPI:', error);
+      source = new EventSource(`/api/jin/stream?token=${encodeURIComponent(authToken)}`);
+    } catch {
+      return; // no stream endpoint — the chat round trip still shows working state
     }
-  };
+
+    const onEvent = (event: MessageEvent<string>) => {
+      try {
+        applyStreamEvent(JSON.parse(event.data) as StreamEvent);
+      } catch {
+        // malformed SSE payload — ignore, never leak raw JSON into the transcript
+      }
+    };
+    const onError = () => {
+      // Endpoint absent or connection dropped: fall back to chat-only signalling.
+      source.close();
+    };
+
+    STREAM_KINDS.forEach((kind) => source.addEventListener(kind, onEvent));
+    source.addEventListener('error', onError);
+    return () => {
+      STREAM_KINDS.forEach((kind) => source.removeEventListener(kind, onEvent));
+      source.removeEventListener('error', onError);
+      source.close();
+    };
+  }, [applyStreamEvent, authToken, isOpen]);
+
+  // Focus lands in the composer when the panel opens, back on the launcher when it closes.
+  useEffect(() => {
+    if (isOpen && !wasOpen.current) inputRef.current?.focus();
+    if (!isOpen && wasOpen.current) launcherRef.current?.focus();
+    wasOpen.current = isOpen;
+  }, [isOpen]);
 
   if (!isOpen) {
     return (
-      <motion.button
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
+      <button
+        ref={launcherRef}
+        type="button"
         onClick={onToggle}
-        className="fixed bottom-4 right-4 z-50 flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-full shadow-2xl hover:shadow-emerald-500/20 transition-all"
+        aria-label={copy.open}
+        aria-expanded={false}
+        className="jin-launcher"
       >
-        <Bot className="w-5 h-5" />
-        <span className="text-sm font-medium">Jin</span>
-        {status?.employee?.status === 'working' && (
-          <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
-        )}
-      </motion.button>
+        <Bot size={18} aria-hidden="true" />
+        <span>{copy.title}</span>
+        {working && <span className="jin-launcher-dot" aria-hidden="true" />}
+      </button>
     );
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 20, scale: 0.95 }}
-      className="fixed bottom-4 right-4 z-50 w-[600px] max-h-[80vh] bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 overflow-hidden flex flex-col"
-    >
-      {/* Header */}
-      <div className="p-4 bg-gradient-to-r from-emerald-600 to-teal-600 text-white shrink-0">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-white/20 rounded-xl">
-              <Bot className="w-6 h-6" />
-            </div>
-            <div>
-              <h3 className="font-semibold">Jin</h3>
-              <p className="text-xs text-white/70">Regional Intelligence Specialist</p>
-            </div>
-          </div>
-          <button onClick={onToggle} className="p-1 hover:bg-white/20 rounded-lg">
-            <ChevronDown className="w-5 h-5" />
+    <section className="jin-panel glass" aria-label={copy.title}>
+      <header className="jin-header">
+        <div className="jin-header-id">
+          <span className="jin-avatar" aria-hidden="true"><Bot size={16} /></span>
+          <span className="jin-heading">
+            <strong>{copy.title}</strong>
+            <small>{copy.subtitle}</small>
+          </span>
+        </div>
+        <div className="jin-header-actions">
+          <span className={working ? 'jin-state is-working' : 'jin-state'}>
+            <span className="jin-state-dot" aria-hidden="true" />
+            {working ? copy.working : copy.available}
+          </span>
+          <button type="button" onClick={onToggle} aria-label={copy.close} className="jin-close">
+            <X size={15} aria-hidden="true" />
           </button>
         </div>
+      </header>
 
-        {/* Status Badge */}
-        <div className="mt-3 flex items-center gap-4">
-          <span className={`px-2 py-1 rounded text-xs font-medium ${
-            status?.employee?.status === 'working'
-              ? 'bg-amber-500 text-white'
-              : 'bg-emerald-500 text-white'
-          }`}>
-            {status?.employee?.status === 'working' ? 'Working' : 'Available'}
-          </span>
-          {status?.metrics && (
-            <span className="text-xs text-white/70">
-              {status.metrics.verifiedContacts} verified contacts
+      {working && (
+        <div className="jin-working" role="status" aria-live="polite">
+          <Loader2 size={13} className="jin-spin" aria-hidden="true" />
+          <span>{workingLabel}</span>
+          {workingProgress !== null && (
+            <span
+              className="jin-progress"
+              role="progressbar"
+              aria-valuenow={workingProgress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={workingLabel}
+            >
+              <span style={{ width: `${workingProgress}%` }} />
             </span>
           )}
         </div>
-      </div>
+      )}
 
-      {/* Tab Navigation */}
-      <div className="flex border-b border-zinc-200 dark:border-zinc-800 shrink-0">
-        {[
-          { id: 'overview', label: 'Overview', icon: Activity },
-          { id: 'extraction', label: 'Extract', icon: Eye },
-          { id: 'verification', label: 'Verify', icon: Shield },
-          { id: 'outreach', label: 'Outreach', icon: Mic },
-          { id: 'kpi', label: 'Analytics', icon: BarChart3 }
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id as TabType)}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 text-xs font-medium transition-colors ${
-              activeTab === tab.id
-                ? 'text-emerald-600 border-b-2 border-emerald-600'
-                : 'text-zinc-500 hover:text-zinc-700'
-            }`}
-          >
-            <tab.icon className="w-4 h-4" />
-            {tab.label}
+      {streamError && (
+        <div className="jin-error" role="alert">
+          <AlertCircle size={14} aria-hidden="true" />
+          <span>{streamError}</span>
+          <button type="button" onClick={retry} className="jin-retry">
+            <RotateCcw size={12} aria-hidden="true" />
+            {copy.retry}
           </button>
-        ))}
-      </div>
+        </div>
+      )}
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4">
-        {/* Overview Tab */}
-        {activeTab === 'overview' && (
-          <div className="space-y-4">
-            {/* Current Tasks */}
-            {status?.employee?.currentTasks?.length > 0 && (
-              <div className="p-3 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl">
-                <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400 mb-2">
-                  Currently Working On
-                </p>
-                {status.employee.currentTasks.map((task: any) => (
-                  <div key={task.jobId} className="flex items-center gap-2 text-sm">
-                    <Loader2 className="w-3 h-3 animate-spin text-emerald-600" />
-                    <span className="text-zinc-700 dark:text-zinc-300">{task.domain}</span>
-                    <span className="text-xs text-zinc-500">({task.progress}%)</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Quick Stats */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-xl">
-                <p className="text-2xl font-semibold text-zinc-900 dark:text-white">
-                  {status?.metrics?.totalStakeholders || 0}
-                </p>
-                <p className="text-xs text-zinc-500">Stakeholders Found</p>
-              </div>
-              <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-xl">
-                <p className="text-2xl font-semibold text-emerald-600">
-                  {status?.metrics?.totalVerified || 0}
-                </p>
-                <p className="text-xs text-zinc-500">Verified Contacts</p>
-              </div>
-              <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-xl">
-                <p className="text-2xl font-semibold text-zinc-900 dark:text-white">
-                  {status?.metrics?.totalOutreachSent || 0}
-                </p>
-                <p className="text-xs text-zinc-500">Outreach Sent</p>
-              </div>
-              <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-xl">
-                <p className="text-2xl font-semibold text-zinc-900 dark:text-white">
-                  {status?.metrics?.avgVision2030Alignment || 0}%
-                </p>
-                <p className="text-xs text-zinc-500">Avg V2030 Alignment</p>
-              </div>
-            </div>
-
-            {/* Recent Work Log */}
-            <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">
-                Recent Activity
-              </h4>
-              <div className="space-y-2">
-                {status?.workLog?.slice(0, 5).map((entry: any, idx: number) => (
-                  <div
-                    key={idx}
-                    className="flex items-start gap-2 p-2 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
-                  >
-                    {entry.status === 'success' ? (
-                      <CheckCircle className="w-3 h-3 text-emerald-500 mt-0.5" />
-                    ) : entry.status === 'error' ? (
-                      <AlertCircle className="w-3 h-3 text-red-500 mt-0.5" />
-                    ) : (
-                      <Activity className="w-3 h-3 text-blue-400 mt-0.5" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-zinc-900 dark:text-white">
-                        {entry.action}
-                      </p>
-                      <p className="text-xs text-zinc-500 truncate">{entry.details}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Extraction Tab */}
-        {activeTab === 'extraction' && (
-          <div className="space-y-4">
-            <div className="p-4 bg-zinc-50 dark:bg-zinc-800 rounded-xl">
-              <h4 className="text-sm font-medium text-zinc-900 dark:text-white mb-3">
-                New Extraction
-              </h4>
-              <div className="space-y-2">
-                <input
-                  type="text"
-                  placeholder="Company domain (e.g., aramco.com)"
-                  value={domainInput}
-                  onChange={(e) => setDomainInput(e.target.value)}
-                  disabled={isExtracting}
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-700 border border-zinc-200 dark:border-zinc-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-                <input
-                  type="text"
-                  placeholder="Company name (optional)"
-                  value={companyInput}
-                  onChange={(e) => setCompanyInput(e.target.value)}
-                  disabled={isExtracting}
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-zinc-700 border border-zinc-200 dark:border-zinc-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-                <button
-                  onClick={handleStartExtraction}
-                  disabled={!domainInput.trim() || isExtracting}
-                  className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-zinc-300 text-white rounded-lg text-sm font-medium"
-                >
-                  {isExtracting ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Extracting...
-                    </>
-                  ) : (
-                    <>
-                      <Search className="w-4 h-4" />
-                      Find Stakeholders
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {/* Recent Stakeholders */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-sm font-medium text-zinc-900 dark:text-white">
-                  Recent Stakeholders
-                </h4>
-                <button
-                  onClick={() => fetchStakeholders()}
-                  className="text-xs text-emerald-600 hover:text-emerald-700"
-                >
-                  Refresh
-                </button>
-              </div>
-              <div className="space-y-2">
-                {stakeholders.slice(0, 5).map((stakeholder: any) => (
-                  <div
-                    key={stakeholder.stakeholder_id}
-                    className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-lg cursor-pointer hover:bg-zinc-100"
-                    onClick={() => setSelectedStakeholder(stakeholder)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-zinc-900 dark:text-white">
-                          {stakeholder.name}
-                        </p>
-                        <p className="text-xs text-zinc-500">
-                          {stakeholder.title} at {stakeholder.company}
-                        </p>
-                      </div>
-                      <span className={`text-xs px-2 py-1 rounded ${
-                        stakeholder.verified
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : 'bg-amber-100 text-amber-700'
-                      }`}>
-                        {stakeholder.verified ? 'Verified' : 'Unverified'}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Verification Tab */}
-        {activeTab === 'verification' && (
-          <div className="space-y-4">
-            {selectedStakeholder ? (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-medium text-zinc-900 dark:text-white">
-                    {selectedStakeholder.name}
-                  </h4>
-                  <button
-                    onClick={() => setSelectedStakeholder(null)}
-                    className="text-xs text-zinc-500 hover:text-zinc-700"
-                  >
-                    Back
-                  </button>
-                </div>
-
-                <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
-                  <p className="text-xs text-zinc-500 mb-1">Email</p>
-                  <p className="text-sm text-zinc-900 dark:text-white">
-                    {selectedStakeholder.email || 'Not found'}
-                  </p>
-                  {selectedStakeholder.email_verified && (
-                    <span className="text-xs text-emerald-600">✓ Verified</span>
-                  )}
-                </div>
-
-                <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
-                  <p className="text-xs text-zinc-500 mb-1">Phone</p>
-                  <p className="text-sm text-zinc-900 dark:text-white">
-                    {selectedStakeholder.phone || 'Not found'}
-                  </p>
-                </div>
-
-                <button
-                  onClick={() => performVerification(selectedStakeholder)}
-                  disabled={isLoading}
-                  className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-zinc-300 text-white rounded-lg text-sm font-medium"
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Shield className="w-4 h-4" />
-                  )}
-                  Run Triple-Check Verification
-                </button>
-
-                {verificationResult && (
-                  <div className="p-4 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl">
-                    <h5 className="text-sm font-medium text-emerald-800 dark:text-emerald-400 mb-2">
-                      Verification Result
-                    </h5>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-zinc-600">Overall Status</span>
-                        <span className={`text-xs font-medium px-2 py-1 rounded ${
-                          verificationResult.overallStatus === 'verified'
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : verificationResult.overallStatus === 'partial'
-                            ? 'bg-amber-100 text-amber-700'
-                            : 'bg-red-100 text-red-700'
-                        }`}>
-                          {verificationResult.overallStatus}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-zinc-600">Verification Score</span>
-                        <span className="text-sm font-medium text-zinc-900">
-                          {verificationResult.verificationScore}/100
-                        </span>
-                      </div>
-                      {verificationResult.email && (
-                        <div className="text-xs text-zinc-600">
-                          Email: {verificationResult.email.deliverable ? '✓ Deliverable' : '✗ Not deliverable'}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-zinc-500">
-                <Shield className="w-12 h-12 mx-auto mb-2 opacity-30" />
-                <p className="text-sm">Select a stakeholder to verify</p>
-                <button
-                  onClick={() => fetchStakeholders()}
-                  className="mt-2 text-emerald-600 hover:text-emerald-700 text-sm"
-                >
-                  Load Stakeholders
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Outreach Tab */}
-        {activeTab === 'outreach' && (
-          <div className="space-y-4">
-            {selectedStakeholder ? (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-medium text-zinc-900 dark:text-white">
-                    Draft Outreach for {selectedStakeholder.name}
-                  </h4>
-                  <button
-                    onClick={() => setSelectedStakeholder(null)}
-                    className="text-xs text-zinc-500 hover:text-zinc-700"
-                  >
-                    Back
-                  </button>
-                </div>
-
-                <button
-                  onClick={() => generateOutreach(selectedStakeholder)}
-                  disabled={isLoading}
-                  className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-zinc-300 text-white rounded-lg text-sm font-medium"
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Send className="w-4 h-4" />
-                  )}
-                  Generate Strategic Outreach
-                </button>
-
-                {outreachDraft && (
-                  <div className="p-4 bg-zinc-50 dark:bg-zinc-800 rounded-xl space-y-3">
-                    <div>
-                      <p className="text-xs text-zinc-500 mb-1">Subject</p>
-                      <p className="text-sm font-medium text-zinc-900 dark:text-white">
-                        {outreachDraft.subject}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-zinc-500 mb-1">Body</p>
-                      <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap max-h-40 overflow-y-auto">
-                        {outreachDraft.body}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
-                      <span className="text-xs text-zinc-500">V2030 Alignment:</span>
-                      <span className="text-xs font-medium text-emerald-600">
-                        {outreachDraft.vision2030Alignment}%
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-zinc-500">
-                <Send className="w-12 h-12 mx-auto mb-2 opacity-30" />
-                <p className="text-sm">Select a stakeholder to draft outreach</p>
-                <button
-                  onClick={() => fetchStakeholders()}
-                  className="mt-2 text-emerald-600 hover:text-emerald-700 text-sm"
-                >
-                  Load Stakeholders
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* KPI Tab */}
-        {activeTab === 'kpi' && (
-          <div className="space-y-4">
-            <button
-              onClick={fetchKPIReport}
-              className="text-xs text-emerald-600 hover:text-emerald-700"
-            >
-              Load Weekly Report
+      <div className="jin-transcript custom-scrollbar" role="log" aria-live="polite" aria-relevant="additions">
+        {messages.length === 0 ? (
+          <div className="jin-empty">
+            <p>{copy.empty}</p>
+            <button type="button" className="jin-suggestion" onClick={() => void sendMessage(copy.suggestion)}>
+              {copy.suggestion}
             </button>
-
-            {kpiReport ? (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-xl">
-                    <p className="text-lg font-semibold text-zinc-900 dark:text-white">
-                      {kpiReport.metrics.totalStakeholdersDiscovered}
-                    </p>
-                    <p className="text-xs text-zinc-500">Stakeholders Discovered</p>
-                  </div>
-                  <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-xl">
-                    <p className="text-lg font-semibold text-zinc-900 dark:text-white">
-                      {kpiReport.metrics.verificationRate}%
-                    </p>
-                    <p className="text-xs text-zinc-500">Verification Rate</p>
-                  </div>
-                  <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-xl">
-                    <p className="text-lg font-semibold text-zinc-900 dark:text-white">
-                      {kpiReport.metrics.responseRate}%
-                    </p>
-                    <p className="text-xs text-zinc-500">Response Rate</p>
-                  </div>
-                  <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-xl">
-                    <p className="text-lg font-semibold text-zinc-900 dark:text-white">
-                      {kpiReport.metrics.meetingsBooked}
-                    </p>
-                    <p className="text-xs text-zinc-500">Meetings Booked</p>
-                  </div>
-                </div>
-
-                {kpiReport.topPerformingIndustries?.length > 0 && (
-                  <div>
-                    <h5 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">
-                      Top Industries
-                    </h5>
-                    <div className="space-y-2">
-                      {kpiReport.topPerformingIndustries.map((ind: any, idx: number) => (
-                        <div
-                          key={idx}
-                          className="flex items-center justify-between p-2 bg-zinc-50 dark:bg-zinc-800 rounded-lg"
-                        >
-                          <span className="text-sm text-zinc-900 dark:text-white">
-                            {ind.industry}
-                          </span>
-                          <span className="text-xs text-zinc-500">
-                            {ind.stakeholderCount} stakeholders
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-zinc-500">
-                <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-30" />
-                <p className="text-sm">Load a report to view analytics</p>
-              </div>
-            )}
           </div>
+        ) : (
+          messages.map((message) => (
+            <div
+              key={message.id}
+              className={message.role === 'user' ? 'jin-row is-user' : 'jin-row is-assistant'}
+            >
+              <div className={message.tone === 'error' ? 'jin-bubble is-error' : 'jin-bubble'}>
+                <div className="jin-prose">{renderJinContent(message.content)}</div>
+              </div>
+            </div>
+          ))
         )}
       </div>
-    </motion.div>
+
+      <form
+        className="jin-composer"
+        onSubmit={(event) => {
+          event.preventDefault(); // native form submit waits for IME composition
+          void sendMessage(draft);
+        }}
+      >
+        <label htmlFor="jin-input" className="sr-only">{copy.label}</label>
+        <input
+          id="jin-input"
+          ref={inputRef}
+          type="text"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder={copy.placeholder}
+          autoComplete="off"
+          maxLength={2000}
+        />
+        <button type="submit" aria-disabled={!draft.trim() || sending} aria-label={copy.send}>
+          {sending ? <Loader2 size={15} className="jin-spin" aria-hidden="true" /> : <Send size={15} aria-hidden="true" />}
+        </button>
+      </form>
+    </section>
   );
 };
 

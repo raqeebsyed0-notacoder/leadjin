@@ -67,17 +67,8 @@ export const PricingSection: React.FC<PricingSectionProps> = ({ t, onCtaClick })
                 </div>
                 <div className="text-lg font-semibold mb-4 text-app-text">{tier.name}</div>
                 
-                {/* Price */}
-                <div className="text-[34px] font-extralight tracking-[-0.02em] leading-none text-app-text flex items-start justify-center gap-1">
-                  <sup className="text-sm font-medium mt-2">SAR</sup>
-                  {tier.price}
-                  <sub className="text-sm font-normal opacity-40 self-end mb-2">/mo</sub>
-                </div>
+
                 
-                {/* Leads */}
-                <div className="text-[10px] font-bold tracking-[0.08em] uppercase opacity-40 mt-2 mb-5">
-                  {tier.leads}
-                </div>
 
                 <div className="h-px bg-app-border my-4" />
 

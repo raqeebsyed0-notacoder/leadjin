@@ -1,0 +1,22 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# SQLite WAL/SHM runtime artifacts (SSD write-ahead cache; never committed)
+*.db-shm
+*.db-wal
+
+# Backup / source-snapshot files (never committed)
+*.bak
+*.bak-*

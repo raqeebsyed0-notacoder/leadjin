@@ -61,7 +61,7 @@ export interface FunnelData {
 }
 
 export interface CSVExportOptions {
-  userId: number;
+  userId?: number;
   includeFields?: string[];
 }
 
@@ -225,6 +225,14 @@ export async function orchestrateLeadJourney(
     skipHunt?: boolean;
     skipVerify?: boolean;
     skipOutreach?: boolean;
+    // Production-wiring params forwarded to generation + persistence (email templates).
+    majlisMode?: string;
+    vision2030?: string;
+    geography?: string;
+    industry?: string;
+    jobTitles?: string[];
+    limits?: number;
+    templates?: string[];
   } = {}
 ): Promise<OrchestratedLeadResult> {
   const result: OrchestratedLeadResult = { leadId, errors: [] };
@@ -277,6 +285,14 @@ export async function processIncomingReply(
   options: {
     apiKey?: string;
     classifyOptions?: import('./protocolManager.js').ClassifyOptions;
+    // Production-wiring params forwarded to generation + templates persistence.
+    majlisMode?: string;
+    vision2030?: string;
+    geography?: string;
+    industry?: string;
+    jobTitles?: string[];
+    limits?: number;
+    templates?: string[];
   } = {}
 ): Promise<{
   category: ArtisanReplyCategory;

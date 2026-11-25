@@ -27,6 +27,7 @@
   --color-app-bg: var(--app-bg);
   --color-app-text: var(--app-text);
   --color-app-accent: var(--app-accent);
+  --color-app-on-accent: var(--app-on-accent);
   --color-app-surface: var(--app-surface);
   --color-app-border: var(--app-border);
 }
@@ -36,19 +37,23 @@
   --app-bg: #ffffff;
   --app-text: #3182ce;
   --app-accent: #3182ce;
+  --app-on-accent: #ffffff;
   --app-surface: rgba(255, 255, 255, 0.6);
-  --app-border: rgba(49, 130, 206, 0.2);
-  --wave-opacity: 0.4;
+  --app-border: rgba(49, 130, 206, 0.35);
+  /* 3-step opacity ladder: same hue, hierarchy by opacity only */
+  --tier-1: 1;
+  --tier-2: 0.72;
+  --tier-3: 0.48;
 }
 
 .dark {
-  /* Dark Mode: Black BG, White Text */
+  /* Dark Mode: Black BG, White Text, brand-blue accent on interactive surfaces */
   --app-bg: #000000;
   --app-text: #ffffff;
-  --app-accent: #ffffff;
+  --app-accent: #3182ce;
+  --app-on-accent: #ffffff;
   --app-surface: rgba(255, 255, 255, 0.05);
   --app-border: rgba(255, 255, 255, 0.1);
-  --wave-opacity: 0.2;
 }
 
 @layer base {
@@ -69,6 +74,11 @@
   }
 }
 
+/* Text placed on an accent surface is always white — in both themes.
+   `--app-bg` stays black in dark for the page itself, so the Tailwind
+   `text-app-bg` utility needs this theme-scoped contrast override. */
+.dark .text-app-bg { color: var(--app-on-accent); }
+
 .leadjin-logo {
   font-weight: 200;
   letter-spacing: 0.15em;
@@ -82,13 +92,13 @@
 }
 
 .glass {
-  @apply bg-app-surface backdrop-blur-3xl border border-app-border;
+  @apply bg-app-surface backdrop-blur-md border border-app-border;
 }
 
 .btn-primary {
   @apply px-8 py-4 rounded-lg font-medium transition-all duration-300 flex items-center gap-2;
   background-color: var(--app-accent);
-  color: var(--app-bg);
+  color: var(--app-on-accent);
 }
 
 .btn-secondary {
@@ -97,26 +107,7 @@
 }
 
 .lead-card-mobile {
-  @apply bg-app-surface backdrop-blur-3xl border border-app-border rounded-2xl p-4 mb-3 flex flex-col gap-3 shadow-sm active:scale-[0.98] transition-transform;
-}
-
-.topographic-waves {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  height: 60%;
-  z-index: -1;
-  opacity: var(--wave-opacity);
-  pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg width='100%25' height='100%25' viewBox='0 0 1600 800' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 500 Q400 400 800 500 T1600 500 V800 H0 Z' fill='%233182ce' fill-opacity='0.1'/%3E%3Cpath d='M0 550 Q400 450 800 550 T1600 550 V800 H0 Z' fill='%233182ce' fill-opacity='0.15'/%3E%3Cpath d='M0 600 Q400 500 800 600 T1600 600 V800 H0 Z' fill='%233182ce' fill-opacity='0.2'/%3E%3C/svg%3E");
-  background-size: cover;
-  background-position: bottom;
-  transition: opacity 0.7s ease;
-}
-
-.dark .topographic-waves {
-  background-image: url("data:image/svg+xml,%3Csvg width='100%25' height='100%25' viewBox='0 0 1600 800' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 500 Q400 400 800 500 T1600 500 V800 H0 Z' fill='white' fill-opacity='0.05'/%3E%3Cpath d='M0 550 Q400 450 800 550 T1600 550 V800 H0 Z' fill='white' fill-opacity='0.08'/%3E%3Cpath d='M0 600 Q400 500 800 600 T1600 600 V800 H0 Z' fill='white' fill-opacity='0.1'/%3E%3C/svg%3E");
+  @apply bg-app-surface backdrop-blur-md border border-app-border rounded-2xl p-4 mb-3 flex flex-col gap-3 shadow-sm active:scale-[0.98] transition-transform;
 }
 
 /* Custom Scrollbar */
@@ -142,4 +133,297 @@
 
 ::-webkit-scrollbar-thumb {
   @apply bg-app-accent/20 rounded-full hover:bg-app-accent/40 transition-colors;
+}
+
+
+/* ── Density hierarchy ─────────────────────────────────────────────────────
+   Three opacity steps of the SAME text colour. No new hue, no extra token. */
+.tier-1 { opacity: var(--tier-1); }
+.tier-2 { opacity: var(--tier-2); }
+.tier-3 { opacity: var(--tier-3); }
+
+/* ── Jin floating chat box ────────────────────────────────────────────────
+   Logical inset properties place the launcher on the right in LTR and on
+   the left in RTL without a second rule. */
+.jin-launcher {
+  position: fixed;
+  inset-block-end: 1rem;
+  inset-inline-end: 1rem;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.65rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--app-accent);
+  color: var(--app-on-accent);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.jin-launcher:hover { transform: translateY(-2px); }
+.jin-launcher-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: currentColor;
+  animation: jin-pulse 1.2s ease-in-out infinite;
+}
+
+.jin-panel {
+  position: fixed;
+  inset-block-end: 1rem;
+  inset-inline-end: 1rem;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: min(26rem, calc(100vw - 2rem));
+  height: min(32rem, calc(100vh - 5rem));
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 1rem;
+  background: var(--app-bg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22);
+  animation: jin-in 0.18s ease-out;
+}
+
+.jin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-block-end: 1px solid var(--app-border);
+  flex: none;
+}
+.jin-header-id { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+.jin-avatar {
+  width: 1.9rem;
+  height: 1.9rem;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 0.6rem;
+  background: var(--app-accent);
+  color: var(--app-on-accent);
+}
+.jin-heading { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.jin-heading strong { font-size: 0.875rem; font-weight: 600; }
+.jin-heading small {
+  font-size: 0.68rem;
+  opacity: var(--tier-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jin-header-actions { display: flex; align-items: center; gap: 0.5rem; flex: none; }
+.jin-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: var(--tier-2);
+}
+.jin-state-dot {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: none;
+  border-radius: 999px;
+  background: var(--app-accent);
+  opacity: var(--tier-2);
+}
+.jin-state.is-working .jin-state-dot { animation: jin-pulse 1.2s ease-in-out infinite; }
+.jin-close {
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--app-text);
+}
+.jin-close:hover { border-color: var(--app-border); }
+
+.jin-working {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 1rem;
+  border-block-end: 1px solid var(--app-border);
+  font-size: 0.72rem;
+  opacity: var(--tier-2);
+  flex: none;
+}
+.jin-progress {
+  flex: 1;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--app-border);
+  overflow: hidden;
+}
+.jin-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--app-accent);
+  transition: width 0.2s ease;
+}
+
+.jin-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.75rem 1rem 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.65rem;
+  font-size: 0.75rem;
+  flex: none;
+}
+.jin-retry {
+  margin-inline-start: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  opacity: var(--tier-2);
+}
+
+.jin-transcript {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1rem;
+}
+.jin-empty {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  text-align: center;
+  font-size: 0.8rem;
+  opacity: var(--tier-2);
+}
+.jin-suggestion {
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: var(--app-text);
+  background: transparent;
+}
+.jin-suggestion:hover { border-color: var(--app-accent); }
+.jin-row { display: flex; }
+.jin-row.is-user { justify-content: flex-end; }
+.jin-row.is-assistant { justify-content: flex-start; }
+.jin-bubble {
+  max-width: 85%;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.8rem;
+  background: var(--app-surface);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.jin-row.is-user .jin-bubble {
+  background: var(--app-accent);
+  border-color: transparent;
+  color: var(--app-on-accent);
+}
+.jin-bubble.is-error { opacity: var(--tier-2); }
+.jin-prose p { margin: 0 0 0.35rem; }
+.jin-prose p:last-child { margin-block-end: 0; }
+
+.jin-composer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem;
+  border-block-start: 1px solid var(--app-border);
+  flex: none;
+}
+.jin-composer input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.6rem;
+  background: transparent;
+  color: var(--app-text);
+  font-size: 0.8125rem;
+  outline: none;
+}
+.jin-composer input:focus-visible { border-color: var(--app-accent); }
+.jin-composer button {
+  width: 2.2rem;
+  height: 2.2rem;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 0.6rem;
+  background: var(--app-accent);
+  color: var(--app-on-accent);
+}
+.jin-composer button[aria-disabled="true"] { opacity: var(--tier-3); }
+
+@keyframes jin-spin { to { transform: rotate(360deg); } }
+@keyframes jin-pulse { 50% { opacity: var(--tier-3); } }
+@keyframes jin-in { from { opacity: 0; transform: translateY(0.5rem); } }
+.jin-spin { animation: jin-spin 0.9s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .jin-spin,
+  .jin-launcher-dot,
+  .jin-state.is-working .jin-state-dot { animation: none; }
+  .jin-panel { animation: none; }
+  .jin-launcher { transition: none; }
+}
+
+/* ── LIGHT theme: stronger brand-blue presence ───────────────────────────
+   Every rule below is scoped with :root:not(.dark), so the approved dark
+   theme is byte-for-byte untouched. Only the locked #3182ce / #ffffff hue
+   family is used; contrast stays white-on-blue and blue-on-white. */
+:root:not(.dark) .light-accent-pill {
+  background-color: var(--app-accent);
+  border-color: var(--app-accent);
+  color: var(--app-on-accent);
+}
+:root:not(.dark) .light-accent-pill .tier-2 {
+  opacity: 1;
+  color: var(--app-on-accent);
+}
+:root:not(.dark) .light-accent-pill .jin-state-dot {
+  background: var(--app-on-accent);
+  opacity: 1;
+}
+:root:not(.dark) .light-accent-heading {
+  border-bottom-color: var(--app-accent);
+  border-bottom-width: 2px;
+}
+:root:not(.dark) .light-accent-muted {
+  opacity: 0.88;
+  color: var(--app-accent);
+}
+:root:not(.dark) label.opacity-40:not(:hover) {
+  opacity: 0.75;
+}
+:root:not(.dark) nav button.opacity-40:not(:hover) {
+  opacity: 0.72;
+}
+:root:not(.dark) .light-accent-link {
+  text-decoration-color: var(--app-accent);
+  opacity: 0.95;
 }

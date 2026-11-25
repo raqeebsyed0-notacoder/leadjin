@@ -7,17 +7,24 @@
  *
  * Providers (lowest priority number = tried first):
  *   1. Gemini Grounding  (GEMINI_API_KEY) — Google Search grounded email discovery
- *   2. Apollo.io          (APOLLO_API_KEY)
- *   3. Snov.io            (SNOV_API_KEY + SNOV_API_SECRET)
+ *   2. Apollo.io          (APOLLO_API_KEY)    [testing-only, behind LEADJIN_TESTING_MODE]
+ *   3. Snov.io            (SNOV_API_KEY + SNOV_API_SECRET)  [testing-only, behind LEADJIN_TESTING_MODE]
  *   4. SMTP MX verifier   (always available, used for verification only)
  *
- * Hunter.io has been replaced by Gemini Grounding (2026-06-02).
+ * Hunter.io has been replaced by Gemini Grounding (2026-06-02). Hunter is never
+ * used as a verification leg — SMTP built-in is the sole verifier.
+ *
+ * D3 (2026-10-20): Apollo and Snov are testing-only legs. They are instantiated
+ * only when LEADJIN_TESTING_MODE is set. Each testing-provider API call is counted
+ * against a per-day cap (LEADJIN_TESTING_CAP, default 20). Production runs on the
+ * model key (GEMINI_API_KEY) + SMTP verify alone — no Apollo/Snov/Hunter required.
  */
 
 import dns from 'dns/promises';
 import net from 'net';
-import { GoogleGenAI } from '@google/genai';
+
 import { getGenAI } from './genaiClient.js';
+import { normalizeDomain } from './enrichmentCache.js';
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -63,7 +70,7 @@ interface EnrichmentProvider {
   /** Lower number = tried first */
   priority: number;
   isConfigured(): boolean;
-  findEmail(params: ContactInput): Promise<EnrichmentResult | null>;
+  findEmail(params: ContactInput, context?: Record<string, unknown>): Promise<EnrichmentResult | null>;
   findPhone(params: ContactInput): Promise<EnrichmentResult | null>;
   verifyEmail(email: string): Promise<VerificationResult>;
 }
@@ -120,6 +127,62 @@ export async function mxCheck(domain: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Testing-only provider gate (D3 refactor)
+//
+// Apollo and Snov are testing-only legs — they require LEADJIN_TESTING_MODE
+// to be explicitly enabled. Each testing-provider API call is counted against
+// a per-day cap (LEADJIN_TESTING_CAP, default 20) to stay inside free-tier
+// limits. When LEADJIN_TESTING_MODE is unset or "0", Apollo/Snov are never
+// instantiated and never appear in the provider list — prod runs on the model
+// key (GEMINI) + SMTP verify alone.
+// ---------------------------------------------------------------------------
+
+const TESTING_MODE = process.env.LEADJIN_TESTING_MODE === '1' || process.env.LEADJIN_TESTING_MODE === 'true';
+const TESTING_DAILY_CAP = parseInt(process.env.LEADJIN_TESTING_CAP ?? '20', 10);
+const TESTING_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h UTC day
+
+interface TestingLedger {
+  day: string; // UTC date YYYY-MM-DD
+  calls: number;
+}
+
+// Module-level burn ledger for testing-only provider calls (in-process)
+let testingLedger: TestingLedger = {
+  day: new Date().toISOString().slice(0, 10),
+  calls: 0,
+};
+
+function _resetTestingLedgerIfRolled(): void {
+  const today = new Date().toISOString().slice(0, 10);
+  if (testingLedger.day !== today) {
+    testingLedger = { day: today, calls: 0 };
+  }
+}
+
+/** Returns true if a testing-only provider API call is allowed under today's cap */
+export function testingCallAllowed(): boolean {
+  _resetTestingLedgerIfRolled();
+  return testingLedger.calls < TESTING_DAILY_CAP;
+}
+
+/** Record a testing-only provider API call after the cap check passes */
+export function recordTestingCall(): void {
+  _resetTestingLedgerIfRolled();
+  testingLedger.calls += 1;
+}
+
+/** Current testing-provider burn ledger state (for admin/debugging) */
+export function getTestingLedger(): { day: string; calls: number; cap: number; remaining: number } {
+  _resetTestingLedgerIfRolled();
+  return {
+    day: testingLedger.day,
+    calls: testingLedger.calls,
+    cap: TESTING_DAILY_CAP,
+    remaining: TESTING_DAILY_CAP - testingLedger.calls,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -238,15 +301,19 @@ class SmtpBuiltinProvider implements EnrichmentProvider {
 // ---------------------------------------------------------------------------
 
 class GeminiProvider implements EnrichmentProvider {
-  name = 'gemini';
+  name = 'ai';
   priority = 10;
 
   isConfigured(): boolean {
-    return !!process.env.GEMINI_API_KEY;
+    // Gemini Grounding is the primary provider; it dispatches to the
+    // provider-agnostic genaiClient which runs locally (Ollama). No key is
+    // required, so this is always configured in the deployed config.
+    return true;
   }
 
-  async findEmail(params: ContactInput): Promise<EnrichmentResult | null> {
-    const domain = params.domain || extractDomain(params.company);
+  async findEmail(params: ContactInput, context?: Record<string, unknown>): Promise<EnrichmentResult | null> {
+    const baseDomain = params.domain || extractDomain(params.company);
+    const domain = baseDomain || (params.company ? extractDomain(params.company) : '');
     try {
       console.log(`[Waterfall][Gemini] Searching email for ${params.name} at ${domain || params.company}`);
 
@@ -262,7 +329,7 @@ class GeminiProvider implements EnrichmentProvider {
         `Confidence should be 50-70 if it's a generated/pattern-based guess. Return 0 confidence and empty email if you genuinely cannot find anything.`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'flash',
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
@@ -315,7 +382,7 @@ class GeminiProvider implements EnrichmentProvider {
       `Only respond if you know the company's real email pattern. Otherwise return {"email": "", "confidence": 0}.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'flash',
       contents: prompt,
       config: { temperature: 0 },
     });
@@ -364,6 +431,13 @@ class ApolloProvider implements EnrichmentProvider {
   }
 
   private async matchPerson(params: ContactInput): Promise<any | null> {
+    // Testing-only gate: per-day cap on Apollo API calls (D3)
+    if (!testingCallAllowed()) {
+      console.warn('[Waterfall][Apollo] Testing daily cap reached — skipping call');
+      return null;
+    }
+    recordTestingCall();
+
     const { firstName, lastName } = splitName(params.name);
 
     try {
@@ -484,6 +558,13 @@ class SnovProvider implements EnrichmentProvider {
   }
 
   async findEmail(params: ContactInput): Promise<EnrichmentResult | null> {
+    // Testing-only gate: per-day cap on Snov API calls (D3)
+    if (!testingCallAllowed()) {
+      console.warn('[Waterfall][Snov] Testing daily cap reached — skipping call');
+      return null;
+    }
+    recordTestingCall();
+
     const token = await this.getAccessToken();
     if (!token) return null;
 
@@ -556,14 +637,37 @@ export class WaterfallEnrichment {
   private providers: EnrichmentProvider[];
 
   constructor() {
-    // Gemini Grounding is the primary provider (requires GEMINI_API_KEY).
-    // ApolloProvider and SnovProvider are intentionally NOT added here (de-pay: no paid APIs).
-    // Their classes remain defined for future opt-in but are never instantiated in production.
-    const gemini = new GeminiProvider();
-    this.providers = [
-      gemini,
-      new SmtpBuiltinProvider(),
-    ].sort((a, b) => a.priority - b.priority);
+    // Gemini Grounding is the primary provider (requires GEMINI_API_KEY) —
+    // this is the "model key" path. Production runs on this alone.
+    const aiProvider = new GeminiProvider();
+    const providers: EnrichmentProvider[] = [aiProvider];
+
+    // Apollo and Snov are testing-only legs (D3). They are instantiated only
+    // when LEADJIN_TESTING_MODE is explicitly enabled. Each testing-provider
+    // call is gated by a per-day cap (see testingCallAllowed/recordTestingCall).
+    // When the flag is OFF, Apollo/Snov never appear in the provider list.
+    if (TESTING_MODE) {
+      console.log('[Waterfall] Testing mode ON — enabling Apollo + Snov with per-day cap', TESTING_DAILY_CAP);
+      const apollo = new ApolloProvider();
+      const snov = new SnovProvider();
+      if (apollo.isConfigured()) {
+        providers.push(apollo);
+        console.log('[Waterfall] Apollo enabled (testing-only leg)');
+      } else {
+        console.log('[Waterfall] Apollo key absent — skipping testing leg');
+      }
+      if (snov.isConfigured()) {
+        providers.push(snov);
+        console.log('[Waterfall] Snov enabled (testing-only leg)');
+      } else {
+        console.log('[Waterfall] Snov key absent — skipping testing leg');
+      }
+    } else {
+      console.log('[Waterfall] Testing mode OFF — prod path: Gemini + SMTP only');
+    }
+
+    providers.push(new SmtpBuiltinProvider());
+    this.providers = providers.sort((a, b) => a.priority - b.priority);
   }
 
   /** Returns only providers that have their API keys configured */
@@ -587,19 +691,31 @@ export class WaterfallEnrichment {
    * Tries each active provider (ordered by priority) until an email is found.
    * Returns null if no configured provider can find one.
    */
-  async findEmail(params: ContactInput): Promise<EnrichmentResult | null> {
+  async findEmail(
+    params: ContactInput,
+    context?: Record<string, unknown>,
+    entityKey?: string,
+  ): Promise<EnrichmentResult | null> {
+    // Dedupe by normalized domain/entity against the existing cache
+    // (SQLite-backed via enrichmentCache; in-memory entityCache above for speed).
+    const entity = context && context.entityKey ? String(context.entityKey) : '';
+    const baseDomain = params.domain || extractDomain(params.company);
+    const domain = entity || normalizeDomain(baseDomain || params.company || '');
+    if (entity && entityCache.has(entity)) {
+      const cached = entityCache.get(entity)!;
+      if (cached) { console.log('[Waterfall] findEmail — dedupe hit ' + entity); return cached; }
+    }
     const active = this.getActiveProviders().filter(p => p.name !== 'smtp_builtin');
-
     if (active.length === 0) {
       console.log('[Waterfall] No email-finding providers configured — returning null');
       return null;
     }
-
     for (const provider of active) {
       try {
-        const result = await provider.findEmail(params);
+        const result = await provider.findEmail(params, context);
         if (result) {
           console.log(`[Waterfall] findEmail — ${provider.name}: found ${result.value}`);
+          if (entity) entityCache.set(entity, result);
           return result;
         }
         console.log(`[Waterfall] findEmail — ${provider.name}: not-found`);
@@ -607,7 +723,6 @@ export class WaterfallEnrichment {
         console.warn(`[Waterfall] findEmail — ${provider.name} threw: ${e.message}`);
       }
     }
-
     console.log('[Waterfall] findEmail — all providers exhausted, returning null');
     return null;
   }
@@ -645,7 +760,9 @@ export class WaterfallEnrichment {
    * Triple verification pipeline:
    *   1. Syntax check
    *   2. DNS MX check
-   *   3. Best available provider verifier (Hunter if configured, else SMTP built-in)
+   *   3. SMTP built-in verifier (Hunter was replaced by Gemini on 2026-06-02;
+   *      Gemini does not perform email verification, so SMTP built-in is the
+   *      sole verifier in both prod and testing paths)
    */
   async verifyEmail(email: string): Promise<VerificationResult> {
     // Step 1: syntax
@@ -662,13 +779,10 @@ export class WaterfallEnrichment {
       return { valid: true, deliverable: false, catchAll: false, source: 'mx_check' };
     }
 
-    // Step 3: provider verify (prefer Hunter, fall back to SMTP)
-    const hunterProvider = this.providers.find(p => p.name === 'hunter' && p.isConfigured());
+    // Step 3: SMTP built-in verification (sole verifier — Hunter replaced by Gemini)
     const smtpProvider = this.providers.find(p => p.name === 'smtp_builtin')!;
-
-    const verifier = hunterProvider ?? smtpProvider;
-    const result = await verifier.verifyEmail(email);
-    console.log(`[Waterfall] verifyEmail — ${verifier.name}: deliverable=${result.deliverable}`);
+    const result = await smtpProvider.verifyEmail(email);
+    console.log(`[Waterfall] verifyEmail — ${smtpProvider.name}: deliverable=${result.deliverable}`);
     return result;
   }
 
@@ -678,14 +792,14 @@ export class WaterfallEnrichment {
    *   - Find phone (waterfall)
    *   - Verify found email
    */
-  async enrichContact(params: ContactInput): Promise<FullEnrichmentResult> {
+  async enrichContact(params: ContactInput, context?: Record<string, unknown>): Promise<FullEnrichmentResult> {
     const providersAttempted: string[] = [];
 
     const active = this.getActiveProviders();
     active.forEach(p => providersAttempted.push(p.name));
 
     const [email, phone] = await Promise.all([
-      this.findEmail(params),
+      this.findEmail(params, context),
       this.findPhone(params),
     ]);
 
@@ -734,4 +848,9 @@ export class WaterfallEnrichment {
 // ---------------------------------------------------------------------------
 
 /** Singleton instance — import and use directly */
+// Entity dedupe cache — keyed by normalized domain/entity. Results are
+// persisted to SQLite enrichment_cache via enrichmentCache when a db is
+// wired in (see enrichmentEngine.enrichBatch); in-memory here for speed.
+const entityCache = new Map<string, EnrichmentResult | null>();
+
 export const waterfallEnrichment = new WaterfallEnrichment();

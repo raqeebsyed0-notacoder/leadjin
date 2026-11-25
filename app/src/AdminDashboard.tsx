@@ -43,18 +43,51 @@ export default function AdminDashboard() {
   const [isLoading, setIsLoading] = useState(false);
   const [consecutiveFailures, setConsecutiveFailures] = useState(0);
 
+  // Step 1: Authenticate via email login (get session token for an is_admin user)
+  const [authToken, setAuthToken] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminLoginLoading, setAdminLoginLoading] = useState(false);
+  const [adminLoginError, setAdminLoginError] = useState('');
+
   // SECURE: No sessionStorage - secret only in memory
   // Authentication is verified server-side via secure session/cookie
 
+  // Step 1: Email login — must produce a session for a user with is_admin=1
+  const handleAdminLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminLoginError('');
+    setAdminLoginLoading(true);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: adminEmail, password: adminPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Login failed');
+      if (!data.user || !data.user.is_admin) {
+        throw new Error('Admin access required — your account is not an administrator.');
+      }
+      setAuthToken(data.token);
+      setAdminLoginError('');
+    } catch (err: any) {
+      setAdminLoginError(err.message);
+    } finally {
+      setAdminLoginLoading(false);
+    }
+  };
+
   const fetch_ = useCallback(async (s: string) => {
     // Use GET with header for secret (more semantically correct for read-only data)
-    const r = await fetch('/api/admin/dashboard', { 
-      method: 'GET', 
-      headers: { 'x-admin-secret': s }
+    // requireAdmin needs BOTH x-admin-secret AND a valid session token for an is_admin user
+    const r = await fetch('/api/admin/dashboard', {
+      method: 'GET',
+      headers: { 'x-admin-secret': s, 'Authorization': `Bearer ${authToken}` }
     });
     if (!r.ok) throw new Error('Forbidden');
     return r.json() as Promise<DashboardData>;
-  }, []);
+  }, [authToken]);
 
   const load = useCallback(async (s: string) => {
     setIsLoading(true);
@@ -76,20 +109,20 @@ export default function AdminDashboard() {
   // Auto-refresh with exponential backoff on failure
   useEffect(() => {
     if (!secret) return;
-    
+
     // Backoff: 30s → 60s → 120s after consecutive failures
     const baseInterval = 30000;
     const backoffMultiplier = Math.min(Math.pow(2, consecutiveFailures), 4);
     const intervalMs = baseInterval * backoffMultiplier;
-    
+
     const id = setInterval(() => load(secret), intervalMs);
     return () => clearInterval(id);
   }, [secret, load, consecutiveFailures]);
-  
+
   // Auto-logout after 30 minutes of inactivity
   useEffect(() => {
     if (!secret) return;
-    
+
     let inactivityTimeout: NodeJS.Timeout;
     const resetTimer = () => {
       clearTimeout(inactivityTimeout);
@@ -99,17 +132,53 @@ export default function AdminDashboard() {
         setError('Session expired due to inactivity');
       }, 30 * 60 * 1000); // 30 minutes
     };
-    
+
     // Reset on user activity
     const events = ['mousedown', 'keydown', 'touchstart', 'scroll'];
     events.forEach(e => document.addEventListener(e, resetTimer));
     resetTimer();
-    
+
     return () => {
       clearTimeout(inactivityTimeout);
       events.forEach(e => document.removeEventListener(e, resetTimer));
     };
   }, [secret]);
+
+  // Step 1: Email login gate — must authenticate as a user with is_admin=1
+  if (!authToken) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0a] text-white flex items-center justify-center">
+        <div className="w-full max-w-sm space-y-6 p-8 rounded-3xl bg-white/5 border border-white/10">
+          <div>
+            <h1 className="text-xl font-light">LEADJIN <span className="text-blue-400">Admin</span></h1>
+            <p className="text-xs opacity-40 mt-1">Administrator Authentication</p>
+          </div>
+          <p className="text-xs opacity-40">
+            Sign in with your founder email account. Only accounts with admin privileges can access this dashboard.
+          </p>
+          {adminLoginError && <p className="text-xs text-red-400">{adminLoginError}</p>}
+          <form onSubmit={handleAdminLogin} className="space-y-4">
+            <input
+              type="email" placeholder="Admin email" required
+              value={adminEmail} onChange={e => setAdminEmail(e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-blue-400/50"
+            />
+            <input
+              type="password" placeholder="Password" required
+              value={adminPassword} onChange={e => setAdminPassword(e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-blue-400/50"
+            />
+            <button
+              type="submit" disabled={adminLoginLoading}
+              className="w-full bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl py-3 text-sm transition-colors"
+            >
+              {adminLoginLoading ? 'Signing in...' : 'Sign In & Continue'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   if (!secret || error) {
     return (
@@ -119,7 +188,15 @@ export default function AdminDashboard() {
             <h1 className="text-xl font-light">LEADJIN <span className="text-blue-400">Admin</span></h1>
             <p className="text-xs opacity-40 mt-1">Developer Dashboard</p>
           </div>
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          <p className="text-xs opacity-40">
+            Enter the admin secret to access the developer dashboard. If you need to switch accounts, sign out first.
+          </p>
+          <button
+            onClick={() => { setAuthToken(''); setAdminEmail(''); setAdminPassword(''); setAdminLoginError(''); setSecret(''); setError(''); }}
+            className="text-[10px] opacity-40 hover:opacity-80 underline text-blue-400/50 hover:text-blue-400"
+          >
+            ← Sign out and switch account
+          </button>
           <input
             type="password"
             placeholder="Admin secret"
@@ -163,7 +240,7 @@ export default function AdminDashboard() {
           <button onClick={() => load(secret)} className="text-[10px] opacity-40 hover:opacity-80 border border-white/10 px-3 py-1.5 rounded-lg transition-opacity">
             Refresh now
           </button>
-          <button onClick={() => { setSecret(''); setData(null); setError(''); }}
+          <button onClick={() => { setSecret(''); setData(null); setError(''); setAuthToken(''); setAdminEmail(''); setAdminPassword(''); setAdminLoginError(''); }}
             className="text-[10px] opacity-40 hover:opacity-80 border border-white/10 px-3 py-1.5 rounded-lg transition-opacity">
             Logout
           </button>

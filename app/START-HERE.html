@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>leadjin-portal — start here</title>
+<style>
+@font-face{font-family:'Playfair Display';src:url('../../data/brand identity/fonts/Final-PlayfairDisplay/PlayfairDisplay-Bold.ttf') format('truetype');font-weight:700;font-display:swap}
+@font-face{font-family:'Playfair Display';src:url('../../data/brand identity/fonts/Final-PlayfairDisplay/PlayfairDisplay-Regular.ttf') format('truetype');font-weight:400;font-display:swap}
+@font-face{font-family:'Questrial';src:url('../../data/brand identity/fonts/Final-Questrial/Questrial-Regular.ttf') format('truetype');font-display:swap}
+@font-face{font-family:'Noto Kufi Arabic';src:url('../../data/brand identity/fonts/Final-NotoKufiArabic/NotoKufiArabic-Regular.ttf') format('truetype');font-display:swap}
+
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:#F5F3EF;color:#0A0A0A;font-family:'Questrial',-apple-system,'Segoe UI',sans-serif;
+  font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:920px;margin:0 auto;padding:0 22px}
+.hero{background:#0A0A0A;color:#F5F3EF;border-bottom:3px solid #3290ED;padding:46px 0 40px}
+.hero svg.logo{width:296px;max-width:74vw;height:auto;display:block;margin-bottom:26px}
+.hero h1{font-family:'Playfair Display',Georgia,serif;font-weight:700;font-size:44px;line-height:1.1;
+  margin:0 0 12px;letter-spacing:-.5px}
+.hero .eyebrow{font-size:13px;letter-spacing:.22em;text-transform:uppercase;color:#3290ED;margin:0 0 10px}
+.hero .sub{margin:14px 0 0;font-size:17px;color:#cfcbc4;max-width:640px}
+.summary{background:#fff;border:1px solid #e5e0d6;border-radius:14px;padding:6px 0;margin:-26px 0 34px;
+  box-shadow:0 10px 30px rgba(10,10,10,.07);position:relative;z-index:2}
+.summary ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,1fr)}
+.summary li{padding:16px 18px;border-right:1px solid #f0ece3}
+.summary li:last-child{border-right:0}
+.summary .n{font-family:'Playfair Display',Georgia,serif;font-size:30px;font-weight:700;line-height:1;
+  display:block;margin-bottom:6px}
+.summary .l{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#7d7669}
+main{padding:8px 0 60px}
+section{margin:0 0 40px}
+h2{font-family:'Playfair Display',Georgia,serif;font-weight:700;font-size:27px;margin:0 0 4px;letter-spacing:-.2px}
+h2 + .rule{width:56px;height:3px;background:#3290ED;margin:0 0 20px;border-radius:2px}
+h3{font-family:'Playfair Display',Georgia,serif;font-weight:700;font-size:19px;margin:26px 0 8px}
+p{margin:0 0 14px}
+.card{background:#fff;border:1px solid #e5e0d6;border-radius:14px;padding:22px 24px;margin:0 0 16px}
+.card.tight{padding:16px 20px}
+.lead{font-size:17px;color:#3a3630}
+.tag{display:inline-block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  border:1px solid #3290ED;color:#2074c9;border-radius:999px;padding:3px 11px;margin:0 8px 8px 0;background:#f2f8fe}
+.tag.grey{border-color:#cdc7bb;color:#6e6759;background:#faf8f4}
+.tag.red{border-color:#c0392b;color:#a83226;background:#fdf3f1}
+.k{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#7d7669;margin:0 0 10px}
+ul.plain{margin:0 0 14px;padding-left:20px}
+ul.plain li{margin:0 0 7px}
+.twrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 0 8px}
+table{border-collapse:collapse;width:100%;min-width:560px;font-size:15px}
+th{text-align:left;font-weight:400;font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:#7d7669;border-bottom:2px solid #0A0A0A;padding:0 11px 9px 0}
+td{padding:11px 11px 11px 0;border-bottom:1px solid #f0ece3;vertical-align:top}
+td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;word-break:break-word}
+td.num{font-family:'Playfair Display',Georgia,serif;font-weight:700;text-align:right;white-space:nowrap}
+td.date{white-space:nowrap;color:#6e6759;font-size:14px}
+.who{background:#0A0A0A;color:#F5F3EF;border-radius:14px;padding:24px 26px}
+.who h2{color:#F5F3EF}
+.who a{color:#3290ED}
+.who p{color:#cfcbc4}
+footer{border-top:1px solid #ddd7cb;padding:22px 0 40px;font-size:12px;letter-spacing:.14em;
+  text-transform:uppercase;color:#7d7669}
+.note{font-size:14px;color:#6e6759;font-style:italic}
+@media(max-width:560px){
+  .hero h1{font-size:33px}
+  .summary ul{grid-template-columns:repeat(2,1fr)}
+  .summary li{border-bottom:1px solid #f0ece3}
+  .summary li:nth-child(2n){border-right:0}
+  .summary li:nth-last-child(-n+2){border-bottom:0}
+  .twrap table{min-width:0}
+  .twrap table,.twrap tbody,.twrap tr,.twrap th,.twrap td{display:block;width:100%}
+  .twrap tr{border-bottom:1px solid #eee5d5;padding:6px 0}
+  .twrap th{display:none}
+  .twrap td{padding:3px 0;border:0}
+  .twrap td.num{text-align:left}
+}
+
+</style>
+</head>
+<body>
+<header class="hero"><div class="wrap">
+<svg class="logo" role="img" aria-label="Euphoria Experiences" fill="#F5F3EF" id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 1000 290.62">
+  <!-- Generator: Adobe Illustrator 29.1.0, SVG Export Plug-In . SVG Version: 2.1.0 Build 142)  -->
+  <path d="M641.95,167.82c-.74,2.67-9.26,3.08-9.12-1.04l.06-55.65c-1.06-3.48-1.43-5.01,0-8.49l.45-57.82,1.9-.77h62.11l2.12,1.09-.22,65-49.8,1.55,51.42,53.46c-.05.86-3.77,5.01-4.35,5.33-.85.48-1.81.49-2.66,0l-49-49.94-2.91-1.1v48.38ZM642.62,101.68c.83.6,1.82.6,2.79.68,10.77.87,31.07.95,41.78,0,1.96-.17,3.22-.19,3.48-2.4,1.6-13.67-1.28-30.42,0-44.43-.05-1.6-1.35-2.89-2.94-2.94-13.6,1.03-28.94-1.26-42.33,0-1.2.11-1.82.03-2.69,1.06l-.09,48.03Z"/>
+  <path d="M583.44,60.85c.18.12.26.61.6.85,2.71,1.87,10.85,5.8,11.34,8.87l-.08,73.09c-.51,2.27-3.65,2.93-5.37,4.14-9.52,6.75-19.91,14.3-29.87,20.52-1.2.75-3.05,2.2-4.38,1.84l-37.31-25.31-.82-1.32-.21-68.21c-2.73-7.58.29-6.46,4.96-9.42,10.11-6.38,21.08-15.64,31.21-21.2,1.54-.85,3.04-1.83,4.76-.67,8.2,5.87,16.87,11.11,25.17,16.82ZM531.94,143.3c5.96,4.28,14.79,10.34,21.03,14,1.23.72,2.76,1.92,4.15,1.72l27.02-17.96,2.6-2.75v-63.4s-29.71-20.6-29.71-20.6l-1.72.19-26.2,17.67-2.6,2.75-.11,63.51c.3,1.58,3.54,2.91,4.76,3.82.36.27.49.84.79,1.05Z"/>
+  <path d="M899.87,170.18l-12.63-43.23c-1.05-1.93-1.19-3.98-3.71-4.32-9.02-1.21-20.69.98-30.01,0-2.39.04-2.95,2.91-3.84,4.72l-12.5,42.83c-.78.66-8.13-1.49-8.45-2.43l39.28-132.75,1.58.54,38.74,132.21c-.32.93-7.67,3.09-8.45,2.43ZM855.69,114.1h25.68c1.58-1.52.69-4.24.24-6.11-2.33-9.51-6.05-19.6-8.91-29.05-.95-3.15-1.56-7.34-2.54-10.29-.72-2.18-2.53-2.18-3.25,0-4.62,13.94-7.46,28.75-12.45,42.65-.25.74.66,2.63,1.24,2.81Z"/>
+  <path d="M402.62,44.68c2.25.16,7.1-1.23,7.67,1.81l.51,52.95,1.89,1.05c16.94-.59,33.92-.2,50.87-.32,3.26-.02,4.67,1.29,5.61-3.43l.06-51.26c.46-1.4,7.18-1.15,7.72-.38l-.27,119.54c-1.5.21-6.94.9-7.45-.64l-.06-51.79c-.1-1.68-1.03-3.51-2.93-3.49-16.82,1.28-35.95-1.61-52.49,0-1.51.15-2.3.25-3.16,1.65l-.29,52.63c-.12,2.8-7.5,2.43-8.28.82l.61-119.14Z"/>
+  <path d="M365.36,107.42c-.05.18-.83.95-1.08,1.06l-53.79.78-1.02,1.11-.34,52.6-.84,1.93-6.92-.5-.78-2.43.31-116.29c.12-.25.97-1.08,1.06-1.08h62.6l.8.8v62.01ZM311.71,52.74c-1.66.38-2.48,1.69-2.53,3.35.93,13.09-1.2,27.77-.01,40.66.46,5,2.29,3.4,5.62,3.42,13.21.1,26.45-.26,39.64.32,2.05-.37,2.24-1.96,2.41-3.74,1.22-13.05-.98-27.96,0-41.21-.05-1.59-1.34-2.89-2.94-2.94l-42.18.14Z"/>
+  <path d="M163.13,44.61c.8,2.6.8,5.41,0,8.02h-53.23c-.99,0-2.67,2.3-2.42,3.46.93,13.09-1.2,27.77-.02,40.66.46,5,2.29,3.4,5.62,3.42,12.49.1,24.97-.03,37.46.04,2.69.5,3.25,8.07-.5,8.56-11.96,1.57-27.62-1.56-39.64-.05-.97.12-1.51.27-2.16,1.05-2.07,2.46-.19,39.07-.48,44.94l1.34,1.34,52.67.29c2.79.11,2.29,7.15,1.14,8.05h-63.23s-.78-2.43-.78-2.43l.31-116.29c.12-.25.97-1.08,1.06-1.08h62.86Z"/>
+  <path d="M200.04,141.9V45.41c1.18-1.3,7.18-1.19,8.08-.05l.75,87.46,2.12,1.09c13.38-1.04,28.64,1.3,41.79,0,2.42-.24,3.14-.99,3.46-3.49V45.94s.49-1.1.49-1.1c.7-.49,6.72-.65,7.52.57v96.22l-.8.8h-62.06c-.18,0-.81-.71-1.34-.53Z"/>
+  <path d="M737.72,160.61h20.6c.15,0,1.3-1.29,1.59-1.61l.24-103.39c-.28-1.75-1.2-2.67-2.94-2.94-3.3-.52-18.18.67-19.53-.27-.78-1.2-.84-7.5,0-8.09l52.22-.26,1.61.53-.27,7.82c-1.35.94-16.22-.25-19.53.27-1.49.23-2.51.98-2.86,2.49l-.15,102.02c-.18,1.56.89,3.14,2.45,3.43,5.54,1.03,13.84-.8,19.71.09,1.48.48,1.06,6.83.39,8.26l-1.9.77-50.3-.04-1.4-.74c-1.01-.93-.37-8.34.05-8.34Z"/>
+  <path d="M693.84,173.47c1.13.73-2.33,14.19-2.13,16.57l4.82-8.27c4.5-5.23,9.13-2.36,8.49,4.2-.81,8.39-8.36,13.08-14.26,17.83-1.28,5.35-2.53,10.7-3.71,16.07-2.04,9.32-3.16,20.8-5.65,29.63-.2.7-.74,2.22-1.73,2l-.84-1.85,7.53-44.38-2.34.22c-3.14-2.85,2.52-2.67,2.88-3.55l5.08-27.94c.23-.63,1.56-.74,1.86-.54ZM701.87,181.49c-6.76,2.44-7.81,11.74-10.16,17.63.42.39,2.15-1.02,2.62-1.38,5.01-3.75,9.74-9.55,7.53-16.25Z"/>
+  <path d="M741.47,189.51c2.55.95,10.04-6.74,11.16-3.39.55,1.64-4.58,17.16-5.13,20.91-.1.7-.87,6.56.12,6.54,5.09-3.48,8.46-9.42,11.59-14.61,1.48-2.46,3.71-8.02,5.26-9.72,1.04-1.15,1.15-.65,2.05.62-2.8,6.56-6.42,13.36-10.71,19.07-4.19,5.57-11.94,13.25-11.16.08.39-6.53,3.36-13.65,4.83-20.02-7.26,5.58-16.46,3.14-12.39-7.31,1.3-3.35,5.83-10.01,9.65-6.78,1.41,4.19-5.85,14.08-5.27,14.62ZM738.8,187.91c2.43-3.02,4.61-7.37,5.34-11.23-3.37,2.55-5.94,6.85-5.34,11.23Z"/>
+  <path d="M895.73,185.96c-6.2,6.64,3.39,15.43,5.7,21.73l16.28-18.74c1.47-.95,2-.82,2.22.84l-17.2,20.59c.94,5.87-.32,12.38-4.51,16.83-1.93,2.05-5.97,4.85-7.17.68-1.25-4.35,6.37-14.01,8.55-17.79-2.53-7.55-12.88-16.67-6.49-24.88,2.12-2.72,6.1-4.86,9.59-3.7,2.42.8,2.63,2.71.08,2.67-2.96-.04-4.32-1.17-7.06,1.76ZM893.41,227.46c4.77-2.23,7.09-8.34,6.94-13.36l-6.29,10.55-.66,2.81Z"/>
+  <path d="M651.98,177.88c3.79,3.91-7.97,12.36-9.13,15.47-1.28,3.42-2.07,12.65,3.52,11.56,2.85-.56,8.25-6.17,10.3-8.44,1.4-1.55,4.15-6.12,5.31-6.99,1.09-.81,2.5-.59,2.38.76-.06.65-5.46,7.6-6.37,8.62-2.76,3.09-9.08,9.59-13.5,8.72-9.75-1.91-3.01-21.43.98-26.58,1.16-1.5,4.62-5.07,6.52-3.11Z"/>
+  <path d="M721.49,177.34c5.45-.48.33,7.18-1.15,8.97-3.89,4.7-7.42,5.5-7.25,13.07.3,12.75,11.94.24,15.27-3.44,1.05-1.16,4.46-6.33,5.06-6.7.43-.27.84-.35,1.34-.25.47.42.84.62.83,1.34-.02,1.56-9.94,12.38-11.78,13.9-9.17,7.55-13.97,1.98-12.79-8.5.5-4.42,5.29-17.92,10.46-18.37Z"/>
+  <path d="M797.99,177.34c5.45-.48.33,7.18-1.15,8.97-3.89,4.7-7.42,5.5-7.25,13.07.3,12.75,11.94.24,15.27-3.44,1.05-1.16,4.46-6.33,5.06-6.7.43-.27.84-.35,1.34-.25.47.42.84.62.83,1.34-.02,1.56-9.94,12.38-11.78,13.9-9.17,7.55-13.97,1.98-12.79-8.5.5-4.42,5.29-17.92,10.46-18.37Z"/>
+  <path d="M867.86,204.33c2.88,2.72,9.36-3.66,11.37-5.73,1.44-1.48,6.8-9.22,7.33-9.51,1.63-.88,2.39-.1,1.9,1.62-.82,2.81-11.24,13.72-14.03,15.38s-6.06,2.41-8.67-.2c-4.98-4.98.95-22.09,5.49-26.49,3.35-3.24,6.89-2.74,5.15,2.48-1.54,4.6-7.45,7.45-8.84,10.94-.99,2.48-1.71,9.61.3,11.51Z"/>
+  <path d="M817.96,182.56c1.27.84-2.24,8.94-2.13,10.69l4-4.81c6.64-4.4,6.87,10.85,10.16,11.1,3.26-.18,7.54-10.03,8.36-10.49,1.06-.6,2.2.26,1.99,1.68-.17,1.14-4.01,6.78-4.99,7.88-9.91,11.21-11.13-8.38-13.38-8.55-1.88,1-3.02,3.16-4.11,4.97-1.52,2.53-4.43,10.97-5.52,12.13-.6.63-1.07.61-1.87.53-.82-2.39.2-5.1.69-7.58s3.9-15.95,4.91-17.01c.47-.49,1.43-.82,1.87-.53Z"/>
+  <path d="M670.3,198.6l-1.11.33-7.53,12.94-2.05.09c-.11-.94-.03-1.74.29-2.64.97-2.67,8.53-12.85,8.61-13.65-.81-1.09-4.55-13.67-.36-10.97.42.27.82,7.09,2.42,8.01,1.24-1.71,9.27-10.67,10.97-9.91.58.26,1.26,1.13.83,1.91-.39.72-4.64,3.51-5.65,4.53-1.76,1.78-3.5,4.49-5.2,6.41.61,1.65,3.64,7.24,5.47,7.1.55-.04,1.23-1.84,2.66-1.48,2.21.57-.37,3.6-1.85,4.06-2.94.92-6.94-4.16-7.51-6.74Z"/>
+  <path d="M847.39,187.91c-5.09,1.99-8.24,18.32-1.83,18.7,5.01.3,13.85-14.12,16.8-17.92l1.36.28c.38.38.32.84.27,1.31-.3,2.85-11.28,15.62-14.29,17.3-10.62,5.95-11.63-7.47-8.98-14.85,1-2.79,6.39-11.26,8.95-5.77,2.23,4.78-3.27,9.38-2.28.94Z"/>
+  <path d="M770.1,187.91c3.08-.7.34,7.16.24,8.8s-.57,5.51,1.36,5.66c3.66.29,12.45-10.71,14.46-13.92l1.78,1.77c-2.61,4.25-11.42,15.31-16.73,14.8-6.51-.63-2.48-16.79-1.11-17.1Z"/>
+  <path d="M773.42,198.97c-.47.4-2.25.53-2.76.15-.84-4.83,5.58-2.56,2.76-.15Z"/>
+</svg>
+<p class="eyebrow">Euphoria · product</p>
+<h1>leadjin-portal</h1>
+<p class="sub"><b>798 files</b> in <b>12</b> sub-folders. Last changed 2026-11-03.</p>
+</div></header>
+<div class="wrap">
+<meta name="generator" content="euphoria.project-home">
+<div class="summary"><ul><li><span class="n">798</span><span class="l">files</span></li><li><span class="n">12</span><span class="l">sub-folders</span></li><li><span class="n">product</span><span class="l">lane</span></li><li><span class="n">mixed</span><span class="l">contents</span></li></ul></div><main><section><h2>What this is</h2><div class="rule"></div><div class="card"><p class="lead">Product work — something Euphoria builds, sells or runs.</p><p class="k">Where things live</p><p>Everything about <b>leadjin-portal</b> belongs in this one folder. If you are looking for something and it is not listed below, it has escaped and should be brought back.</p></div></section><section><h2>Inside this folder</h2><div class="rule"></div><div class="twrap"><table><thead><tr><th>folder</th><th>files</th><th>last changed</th></tr></thead><tbody><tr><td><span class="mono">android/</span></td><td class="num">570</td><td class="date">2026-03-28</td></tr><tr><td><span class="mono">android-templates/</span></td><td class="num">1</td><td class="date">2026-03-19</td></tr><tr><td><span class="mono">app/</span></td><td class="num">0</td><td></td></tr><tr><td><span class="mono">data/</span></td><td class="num">2</td><td class="date">2026-07-21</td></tr><tr><td><span class="mono">dist/</span></td><td class="num">144</td><td class="date">2026-11-03</td></tr><tr><td><span class="mono">docs/</span></td><td class="num">13</td><td class="date">2026-06-03</td></tr><tr><td><span class="mono">extension/</span></td><td class="num">10</td><td class="date">2026-03-27</td></tr><tr><td><span class="mono">node_modules/</span></td><td class="num">32,654</td><td class="date">2026-11-03</td></tr><tr><td><span class="mono">public/</span></td><td class="num">5</td><td class="date">2026-03-15</td></tr><tr><td><span class="mono">scripts/</span></td><td class="num">5</td><td class="date">2026-07-05</td></tr><tr><td><span class="mono">src/</span></td><td class="num">116</td><td class="date">2026-10-30</td></tr><tr><td><span class="mono">tests/</span></td><td class="num">21</td><td class="date">2026-11-03</td></tr></tbody></table></div><p class="k">Files at this level</p><div class="card tight"><span class="tag grey">_eup242_inspect.mjs</span><span class="tag grey">_eup242_query.mjs</span><span class="tag grey">BUSINESS_MODULE_ANALYSIS.md</span><span class="tag grey">capacitor.config.json</span><span class="tag grey">capacitor.config.ts</span><span class="tag grey">debug_landing_full.png</span><span class="tag grey">docker-compose.yml</span><span class="tag grey">Dockerfile</span><span class="tag grey">ecosystem.config.cjs</span><span class="tag grey">ecosystem.linux.config.cjs</span><span class="tag grey">handoff-D3-waterfall.md</span><span class="tag grey">IMPLEMENTATION_STATUS.md</span><span class="tag grey">index.html</span><span class="tag grey">leadjin.db</span><span class="tag grey">leadjin.db-shm</span><span class="tag grey">leadjin.db-shm.pre-move-20261030-142509</span><span class="tag grey">leadjin.db-wal</span><span class="tag grey">leadjin.db-wal.pre-move-20261030-142509</span><span class="tag grey">leadjin.db.phase4b-pre-20261001-040911.bak</span><span class="tag grey">leadjin.db.pre-move-20261030-142509</span><span class="tag grey">leadjin.db.pre-rebuild-2026-10-30.bak</span><span class="tag grey">LEADJIN_SYSTEM_SPEC.md</span><span class="tag grey">Noto_Kufi_Arabic.zip</span><span class="tag grey">outbound-log.md</span><span class="tag grey">package-lock.json</span><span class="tag grey">package.json</span><span class="tag grey">probe_db_readonly.cjs</span><span class="tag grey">README.md</span><span class="tag grey">server.log</span><span class="tag grey">server.ts</span><span class="tag grey">server.ts.bak-wave1-t1</span><span class="tag grey">server.ts.bak-wave1-t2</span><span class="tag grey">server.ts.bak-wave1-t4</span><span class="tag grey">server.ts.pre-fix-20261030</span><span class="tag grey">setup-dev.bat</span><span class="tag grey">setup-helper.ps1</span><span class="tag grey">test-analytics.cjs</span><span class="tag grey">tmp-check-translations.js</span><span class="tag grey">tsconfig.json</span><span class="tag grey">tsconfig.server.json</span></div></section><section><div class="who"><h2>The rule for this folder</h2><div class="rule"></div><p>One project, one folder. New work goes in a sub-folder here — never a new sibling at the <span class="mono">work/</span> root.</p><p>Owner: steward. Index: <span class="mono">work/INDEX.json</span>. Regenerate: <span class="mono">python3 run/build_project_homes.py</span>.</p></div></section></main><footer>EUPHORIA EXPERIENCES · model deepseek/deepseek-v4.1-flash (nous) · November 2026</footer>
+</div>
+</body>
+</html>

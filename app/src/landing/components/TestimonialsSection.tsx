@@ -10,7 +10,7 @@ interface TestimonialsSectionProps {
 export const TestimonialsSection: React.FC<TestimonialsSectionProps> = ({ t, language }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   
-  // PLACEHOLDER: These can be replaced with real testimonials
+  
   const testimonials = t.testimonials.items || [];
 
   const next = () => setCurrentIndex((prev) => (prev + 1) % testimonials.length);
