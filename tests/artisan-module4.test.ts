@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import { getSharedToken } from './shared-auth';
+import { HAS_AI_KEY } from './provider-availability';
 
 const API_URL = 'http://localhost:3001';
+// AI-backed endpoints fail closed with 503 when no Gemini key is configured.
 
 describe('Artisan Module 4 — Secretary (Reply Manager)', () => {
   let token: string;
@@ -38,7 +40,7 @@ describe('Artisan Module 4 — Secretary (Reply Manager)', () => {
   });
 
   // Test 4.2: Classify a reply (interested)
-  it('4.2 - should classify reply as interested', async () => {
+  it.skipIf(!HAS_AI_KEY)('4.2 - should classify reply as interested', async () => {
     const res = await request(API_URL)
       .post('/api/artisan/replies/classify')
       .set('Authorization', `Bearer ${token}`)
@@ -54,7 +56,7 @@ describe('Artisan Module 4 — Secretary (Reply Manager)', () => {
   }, 15000);
 
   // Test 4.3: Classify a reply (not interested)
-  it('4.3 - should classify reply as not interested', async () => {
+  it.skipIf(!HAS_AI_KEY)('4.3 - should classify reply as not interested', async () => {
     const res = await request(API_URL)
       .post('/api/artisan/replies/classify')
       .set('Authorization', `Bearer ${token}`)

@@ -63,6 +63,26 @@ import {
 } from './src/services/intelligenceHub.js';
 dotenv.config();
 
+// AI-backed routes must fail closed with 503 when the configured provider is
+// missing/unreachable (CI has no model key). Do not report that as a 500 server
+// fault. Reuse this helper at every provider-dependent route boundary.
+function isProviderUnavailable(error: unknown): boolean {
+  const message = String(
+    error && typeof error === 'object' && 'message' in error ? (error as { message: unknown }).message : error
+    ?? ''
+  ).toLowerCase();
+  // Schema/config faults are server bugs (500), not provider unavailability.
+  if (/no such (column|table)|syntax error/.test(message)) return false;
+  return /(api[_ -]?key|not configured|missing.{0,20}key|unauthori[sz]ed|provider.{0,20}(unavailable|not available)|ollama.{0,20}(not|fail)|econnrefused|fetch failed|model.{0,20}not found)/.test(message);
+}
+
+function providerErrorResponse(res: any, error: unknown, message: string) {
+  if (isProviderUnavailable(error)) {
+    return res.status(503).json({ error: 'AI provider unavailable', message });
+  }
+  return res.status(500).json({ error: message });
+}
+
 // --- FOUNDER MODE Configuration ---
 const FOUNDER_EMAIL = process.env.FOUNDER_EMAIL || '';
 const isFounder = (email: string) => FOUNDER_EMAIL ? email?.toLowerCase() === FOUNDER_EMAIL.toLowerCase() : false;
@@ -711,10 +731,8 @@ try {
   }
 }
 
-// Initialize tables (all columns consolidated — fresh DB has complete schema)
-// Initialize Intelligence Hub schema (adds new columns to leads table)
-initIntelligenceSchema(db);
-setIntelligenceDatabase(db);
+// Initialize tables first (all columns consolidated — fresh DB has complete schema).
+// The Intelligence Hub schema/migrations run after CREATE TABLE leads; see below.
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS leads (
@@ -954,6 +972,13 @@ db.exec(`
   );
 `);
 
+// Initialize the Intelligence Hub only after the core tables exist. When this
+// ran before CREATE TABLE leads, every column migration logged "no such table:
+// leads" on a fresh DB and the artisan outreach/reply/CRM routes returned 500
+// with "no such column: <field>" errors.
+initIntelligenceSchema(db);
+setIntelligenceDatabase(db);
+
 // Performance indexes for analytics queries
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_user ON leads(user_id)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_leads_user_status ON leads(user_id, status)"); } catch (e: unknown) { console.error("[Migration] Index creation failed:", (e as Error).message); }
@@ -1014,6 +1039,9 @@ const safeMigrations = [
   "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0",
   "ALTER TABLE users ADD COLUMN ramadan_override INTEGER DEFAULT 0",
   "ALTER TABLE users ADD COLUMN api_key TEXT",
+  // Artisan routes read this per user; without it a fresh DB throws
+  // "no such column: gemini_api_key" and follow-up requests never respond.
+  "ALTER TABLE users ADD COLUMN gemini_api_key TEXT",
   "ALTER TABLE users ADD COLUMN trial_ends_at DATETIME",
   // email_queue columns that might be missing
   "ALTER TABLE email_queue ADD COLUMN attempt_count INTEGER DEFAULT 0",
@@ -4476,7 +4504,7 @@ app.post("/api/craft-outreach", async (req, res) => {
     res.json(result);
   } catch (error: any) {
     console.error('[VisionStrategist] Route error:', error.message);
-    res.status(500).json({ error: "Failed to craft outreach" });
+    return providerErrorResponse(res, error, "Failed to craft outreach");
   }
 });
 
@@ -5174,7 +5202,7 @@ Return ONLY a JSON object in this exact format:
     res.json({ ...result, cached: false });
   } catch (error: any) {
     console.error("[AI Price Suggestion] Error:", error.message);
-    res.status(500).json({ error: "Failed to generate price suggestion" });
+    return providerErrorResponse(res, error, "Failed to generate price suggestion");
   }
 });
 
@@ -6251,7 +6279,7 @@ app.post("/api/next-action/:id", async (req, res) => {
     });
   } catch (error: any) {
     console.error('[IntelligenceHub] Next action error:', error.message);
-    res.status(500).json({ error: "Failed to generate recommendation", });
+    return providerErrorResponse(res, error, "Failed to generate recommendation");
   }
 });
 
