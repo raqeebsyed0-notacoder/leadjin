@@ -1,20 +1,78 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# LeadJin — Regional Intelligence Platform (KSA)
 
-# Run and deploy your AI Studio app
+B2B lead-generation platform built for the Saudi market: find a company, verify it,
+work it through a pipeline, write to it, and report on it. An AI employee, **Jin**,
+runs the lead lifecycle end to end.
 
-This contains everything you need to run your app locally.
+> **Status: pilot / pre-production.** The application builds and its test suite runs.
+> It is not deployed to production, and several data channels (AI harvesting, Gmail,
+> WhatsApp) are gated behind credentials that are not set in this repository.
+> See `docs/architecture/IMPLEMENTATION_STATUS.md` and `LEADJIN_SYSTEM_SPEC.md` in the `docs/` tree.
 
-View your app in AI Studio: https://ai.studio/apps/53b96427-c428-44ec-9bc8-6564348f97a2
+## Repository layout
 
-## Run Locally
+```
+app/                         The runnable application
+  src/                       React 19 + Vite frontend (dashboard, landing, services)
+  server.ts                  Node/Express backend (single entry point)
+  public/                    PWA assets
+  tests/                     Vitest test suite
+  scripts/                   Build / crawl / seeding helpers
+  capacitor.config.*         Capacitor shell configuration
+docs/                        System spec, business module analysis, implementation status
+  architecture/              System spec, business module analysis, implementation status
+  specs/                     Feature design specs
+  plans/                     Feature implementation plans
+  api/                       Third-party API contracts (Wathq)
+infra/                       Docker, docker-compose, PM2 process configs
+  windows/                   Windows dev setup scripts
+mobile/                      Capacitor Android shell + network-security templates
+extension/                   Chrome extension (manifest v3)
+```
 
-**Prerequisites:**  Node.js
+## Running locally
 
+```bash
+cd app
+npm ci
+cp .env.example .env         # fill in the values you need
+npm run dev                  # starts the Express server (default port 3001)
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Frontend build:
+
+```bash
+cd app
+npm run build                # vite build -> app/dist
+npm run preview
+```
+
+Tests (they expect the API running on http://localhost:3001):
+
+```bash
+cd app
+npm run test
+```
+
+## Configuration
+
+All configuration is environment-driven; see `app/.env.example`. No credentials are
+stored in this repository. The backend reads:
+
+- `PORT`, `DATABASE_PATH` — server + SQLite location
+- `SMTP_*` — outreach email delivery
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — Gmail + Calendar OAuth
+- `GEMINI_API_KEY` — AI harvesting and enrichment
+- `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_ID` — WhatsApp Business API
+- `LEADJIN_ADMIN_SECRET` — admin surface
+
+## What this repository is not
+
+- It does **not** contain the production database, credentials, or any customer data.
+- It is **not** the deployment target; deployment config lives in `infra/` and the
+  project root `docker-compose.yml` / `Dockerfile`.
+- Internal operational notes are deliberately kept out of this repository.
+
+## Licence
+
+Not yet set by the owner. Until a licence is added, all rights are reserved.
