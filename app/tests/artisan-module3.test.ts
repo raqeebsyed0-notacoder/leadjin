@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import { getSharedToken } from './shared-auth';
+import { HAS_AI_KEY } from './provider-availability';
 
 const API_URL = 'http://localhost:3001';
 // AI-backed endpoints fail closed with 503 when no Gemini key is configured.
-const HAS_AI_KEY = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
 
 describe('Artisan Module 3 — Vision Strategist', () => {
   let token: string;
