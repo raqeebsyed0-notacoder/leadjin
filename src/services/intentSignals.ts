@@ -1,5 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
-import { getGenAI } from "./genaiClient.js";
+import { getGenAI, type GenAIClient } from "./genaiClient.js";
 import { jsonrepair } from "jsonrepair";
 
 export interface IntentSignal {
@@ -23,7 +22,7 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 class IntentSignalService {
   private cache = new Map<string, CacheEntry>();
 
-  private getAI(): GoogleGenAI {
+  private getAI(): GenAIClient {
     return getGenAI();
   }
 
@@ -111,7 +110,7 @@ Only include verified, recent signals. Return empty array if nothing found.`;
     try {
       const ai = this.getAI();
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "flash",
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
@@ -147,7 +146,7 @@ Only include verified signals with Saudi / GCC relevance. Return empty array if 
     try {
       const ai = this.getAI();
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "flash",
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
@@ -177,7 +176,7 @@ Only return confirmed job changes in the last 90 days. Return empty array if no 
     try {
       const ai = this.getAI();
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "flash",
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],

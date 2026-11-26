@@ -167,3 +167,18 @@ export function setDomainPatternInDb(
     console.error('[EnrichmentCache] setDomainPatternInDb failed:', err.message);
   }
 }
+
+// Normalized domain: lowercase, strip leading 'www.' — used for dedupe by
+// normalized domain/entity across the enrichment layer.
+export function normalizeDomain(domain: string): string {
+  return domain.toLowerCase().replace(/^www\./, '');
+}
+
+// Domain-scoped cache lookups reusing the existing enrichment_cache table.
+export function getCachedResultByDomain(db: any, domain: string): EnrichmentOutput | null {
+  return getCachedResult(db, normalizeDomain(domain));
+}
+
+export function setCachedResultByDomain(db: any, domain: string, result: EnrichmentOutput): void {
+  setCachedResult(db, normalizeDomain(domain), result);
+}

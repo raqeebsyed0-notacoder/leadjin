@@ -77,11 +77,17 @@
 }
 
 /* ─── Form inputs ─────────────────────────────────────────────────────────── */
-[dir="rtl"] input,
+/* Numbers inside Arabic text must stay LTR even though the surrounding text is RTL */
 [dir="rtl"] textarea,
 [dir="rtl"] select {
   text-align: right;
   direction: rtl;
+}
+
+/* Phone-number fields (and any type="tel") keep Latin numerals LTR */
+[dir="rtl"] input[type="tel"] {
+  text-align: left;
+  direction: ltr;
 }
 
 /* Placeholder alignment */
@@ -169,4 +175,30 @@
 .lang-toggle-btn {
   min-width: 3rem;
   font-feature-settings: "tnum";
+}
+
+
+/* ─── Jin floating chat (RTL) ─────────────────────────────────────────────── */
+/* Panel and launcher use logical insets in index.css; only text-direction
+   and directional icon details need Arabic overrides. */
+[dir="rtl"] .jin-transcript,
+[dir="rtl"] .jin-empty,
+[dir="rtl"] .jin-heading {
+  text-align: right;
+}
+[dir="rtl"] .jin-composer input {
+  direction: rtl;
+  text-align: right;
+}
+[dir="rtl"] .jin-prose ul {
+  padding-inline-end: 1rem;
+  padding-inline-start: 0;
+}
+[dir="rtl"] .jin-header-actions,
+[dir="rtl"] .jin-error {
+  flex-direction: row-reverse;
+}
+/* Directional send icon points toward the bubble in RTL. */
+[dir="rtl"] .jin-composer button svg {
+  transform: scaleX(-1);
 }

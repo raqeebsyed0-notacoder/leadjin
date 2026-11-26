@@ -4,11 +4,11 @@ module.exports = {
     script: 'node_modules/tsx/dist/cli.cjs',
     args: 'server.ts',
     interpreter: 'node',
-    cwd: '/home/euphoria/LEADJIN SEPERATE BUSINESS MODULE/leadjin/leadjin',
+    cwd: '/home/euphoria/euphoria-v2/work/leadjin/app',
     env: {
       NODE_ENV: 'production',
       PORT: '3001',
-      LEADJIN_PROJECT_ROOT: '/home/euphoria/LEADJIN SEPERATE BUSINESS MODULE/leadjin/leadjin',
+      LEADJIN_PROJECT_ROOT: '/home/euphoria/euphoria-v2/work/leadjin/app',
     },
     autorestart: true,
     watch: false,

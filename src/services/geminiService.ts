@@ -1,6 +1,28 @@
-import { ThinkingLevel, Type } from "@google/genai";
-import { getGenAI } from "./genaiClient.js";
 import { jsonrepair } from "jsonrepair";
+// ---------------------------------------------------------------------------
+// AI text cleaning helpers (F-21..F-25).
+// ---------------------------------------------------------------------------
+
+function cleanModelText(text: string): string {
+  let t = text.trim();
+  t = t.replace(/^```[a-zA-Z0-9_-]*\n?/gm, '').trim();
+  t = t.replace(/\n?```$/gm, '').trim();
+  return t;
+}
+
+function cleanJsonResponse(text: string): string {
+  let t = text.trim();
+  t = t.replace(/^```[a-zA-Z0-9_-]*\n?/gm, '').trim();
+  t = t.replace(/\n?```$/gm, '').trim();
+  try {
+    return jsonrepair(t);
+  } catch (e) {
+    return t;
+  }
+}
+
+
+import { getGenAI } from './genaiClient.js';
 
 export interface LeadjinLead {
   lead_id: string;
@@ -10,7 +32,7 @@ export interface LeadjinLead {
   industry?: string;
   email?: string;
   email_verified?: boolean;
-  email_source?: 'gemini_search' | 'web_scrape' | 'smtp_verified' | 'pattern_guess' | 'gemini' | 'linkedin_extension';
+  email_source?: 'web_scrape' | 'smtp_verified' | 'pattern_guess' | 'linkedin_extension';
   phone?: string;
   linkedin?: string;
   twitter?: string;
@@ -49,12 +71,8 @@ export interface LeadjinLead {
     semantic_layer_proof: string;
     cultural_layer_proof: string;
   };
-  vision_2030_alignment?: {
-    score: number;
-    program: string;
-    reasoning: string;
-  };
   majlis_mode_tips?: string[];
+  vision_2030_alignment?: { score: number; reasoning: string; program: string };
   company_data?: {
     description: string;
     founded?: string;
@@ -90,7 +108,7 @@ export const generateLeadjinLeads = async (params: {
   geography: string[];
   job_titles: string[];
   limit: number;
-  model: "gemini-2.5-flash" | "gemini-2.5-pro-preview" | "gemini-flash-lite-latest";
+  model: "flash-lite" | "pro-preview" | "flash";
   userApiKey?: string;
   majlisMode?: boolean;
   vision2030?: boolean;
@@ -130,7 +148,7 @@ Format each as: COMPANY | WEBSITE | PERSON NAME | TITLE | LINKEDIN`;
   let discoveredCompanies = "";
   try {
     const discoveryResponse = await ai.models.generateContent({
-      model: params.model === "gemini-flash-lite-latest" ? "gemini-2.5-flash" : params.model,
+      model: params.model === "flash-lite" ? "flash" : params.model,
       contents: discoveryPrompt,
       config: {
         tools: [{ googleSearch: {} }],
@@ -141,7 +159,7 @@ Format each as: COMPANY | WEBSITE | PERSON NAME | TITLE | LINKEDIN`;
     console.warn('[Discovery] Google Search grounding failed, falling back to model knowledge:', e.message);
     // Fallback: use model knowledge without grounding
     const fallbackResponse = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "flash",
       contents: discoveryPrompt + "\nUse your training knowledge. Only include companies you are confident are real.",
       config: { responseMimeType: "text/plain" },
     });
@@ -193,7 +211,7 @@ EMAIL BODY FORMAT — MANDATORY: Each body MUST be a properly formatted HTML ema
 DO NOT write the email as one paragraph. Each section MUST be a separate &lt;p&gt; tag. Use the person's actual first name in the greeting. The signature MUST always be "Euphoria Vision Team / support@euphoriaexperiences.com".
 ${params.emailTemplate ? `Day 0 must use this template: Subject: ${params.emailTemplate.subject}\n${params.emailTemplate.body}` : ''}
 ${params.majlisMode ? 'Add majlis_mode_tips: 3 cultural tips for Saudi business.' : ''}
-${params.vision2030 ? 'Add vision_2030_alignment: {score, program, reasoning}.' : ''}
+
 
 CRITICAL RULES:
 - Use the EXACT company names, websites, and person names from the verified list above
@@ -209,12 +227,12 @@ Each object: {"lead_id":"string","name":"person name","title":"job title","compa
   const synthesisConfig: any = {
     responseMimeType: "application/json",
   };
-  if (params.model === "gemini-2.5-pro-preview") {
-    synthesisConfig.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
+  if (params.model === "pro-preview") {
+    synthesisConfig.thinkingConfig = { thinkingLevel: 'high' };
   }
 
   // Use the user's selected model for synthesis (quality matters here)
-  const synthesisModel = params.model === "gemini-flash-lite-latest" ? "gemini-flash-lite-latest" : params.model;
+  const synthesisModel = params.model;
 
   const response = await ai.models.generateContent({
     model: synthesisModel,
@@ -224,12 +242,7 @@ Each object: {"lead_id":"string","name":"person name","title":"job title","compa
 
   const text = response.text || "";
   try {
-    let jsonStr = text.trim();
-    if (jsonStr.startsWith("```json")) {
-      jsonStr = jsonStr.replace(/^```json\n?/, "").replace(/\n?```$/, "");
-    } else if (jsonStr.startsWith("```")) {
-      jsonStr = jsonStr.replace(/^```\n?/, "").replace(/\n?```$/, "");
-    }
+    let jsonStr = cleanJsonResponse(text);
 
     jsonStr = jsonrepair(jsonStr);
     let parsedLeads = JSON.parse(jsonStr);
@@ -290,8 +303,7 @@ Each object: {"lead_id":"string","name":"person name","title":"job title","compa
         };
       }) as LeadjinLead[];
   } catch (e: any) {
-    console.error("Failed to parse Leadjin leads:", e);
-    console.error("Raw text was:", text);
+    console.error("Failed to parse Leadjin leads:", e.message);
     throw new Error(`Failed to generate leads: ${e.message}`);
   }
 };

@@ -152,7 +152,7 @@ async function resolveDomain(company: string, existingDomain?: string): Promise<
   try {
     const ai = getGenAI();
     const resp = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'flash',
       contents: `What is the official website domain (e.g. example.com) of the company "${company}" in Saudi Arabia? Reply with ONLY the domain, nothing else.`,
       config: {
         tools: [{ googleSearch: {} }],
@@ -235,7 +235,7 @@ EMAIL: <address or NONE>
 SOURCE: <url or NONE>`;
 
     const resp = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'flash',
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],

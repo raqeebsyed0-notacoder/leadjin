@@ -33,7 +33,7 @@ LEADJIN is a world-class, autonomous intelligence engine designed to transform r
    - Real-time revenue tracking within the dashboard.
 
 6. **Calendar Synchronization (The Handshake)**
-   - Google Calendar API integration for seamless meeting scheduling.
+   - Open-source iCalendar (RFC 5545) feed served at `/api/calendar/feed.ics`; subscribe from Thunderbird, Nextcloud, Radicale, Apple Calendar or any CalDAV/iCalendar client.
    - Automated "Meeting Ready" triggers when a lead reaches a high score.
    - Availability management to prevent scheduling conflicts.
 

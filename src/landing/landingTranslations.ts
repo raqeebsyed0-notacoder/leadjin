@@ -10,8 +10,8 @@ export const landingTranslations = {
     },
     hero: {
       nowLive: "NOW LIVE — SAUDI ARABIA",
-      majlisMode: "MAJLIS MODE ACTIVE",
-      v2030Engine: "V2030 ENGINE LIVE",
+      majlisMode: "MAJLIS MODE",
+      v2030Engine: "V2030 ENGINE",
       line1: "Built in the Kingdom.",
       line2: "Built for the Kingdom.",
       line3: "Saudi Arabia's First AI\u2011Native B2B Lead Platform.",
@@ -76,20 +76,19 @@ export const landingTranslations = {
         ["Built-in CRM", true, true],
         ["Automated outreach sequences", true, true],
         ["GCC market coverage", true, false],
-        ["Priced in SAR for Saudi SMBs", true, false]
       ]
     },
     pricing: {
       eyebrow: "PRICING",
       title1: "Simple,",
       title2: "transparent pricing.",
-      subtitle: "50–70% cheaper than traditional Saudi lead generation agencies. Cancel anytime.",
+      subtitle: "Cancel anytime.",
       tiers: [
         {
           name: "Scout",
           tier: "TIER 1",
           price: "1,999",
-          leads: "100–200 VERIFIED LEADS / MONTH",
+          leads: "100–200 LEADS / MONTH",
           features: [
             { text: "Web + app platform access", included: true },
             { text: "Basic CRM & lead harvest dashboard", included: true },
@@ -106,7 +105,7 @@ export const landingTranslations = {
           name: "Pursuit",
           tier: "TIER 2",
           price: "4,999",
-          leads: "300–500 VERIFIED LEADS / MONTH",
+          leads: "300–500 LEADS / MONTH",
           features: [
             { text: "Full web + app platform", included: true },
             { text: "Advanced CRM + analytics", included: true },
@@ -123,7 +122,7 @@ export const landingTranslations = {
           name: "Dominance",
           tier: "TIER 3",
           price: "12,999",
-          leads: "500–1,000 VERIFIED LEADS / MONTH",
+          leads: "500–1,000 LEADS / MONTH",
           features: [
             { text: "Full Saudi + GCC coverage", included: true },
             { text: "Complete platform + API access", included: true },
@@ -153,12 +152,7 @@ export const landingTranslations = {
     testimonials: {
       eyebrow: "TESTIMONIALS",
       title: "Trusted by Saudi businesses",
-      // PLACEHOLDER: Replace with real testimonials
-      items: [
-        { name: "Ahmed Al-Rashid", role: "CEO", company: "Al-Rashid Trading", quote: "LEADJIN transformed our sales process. We went from cold calling to warm conversations with decision-makers who actually need our services." },
-        { name: "Fatima Al-Zahrani", role: "Sales Director", company: "HealthFirst KSA", quote: "The Vision 2030 alignment feature helped us target the right healthcare providers at the right time. Our conversion rate doubled." },
-        { name: "Mohammed Al-Qahtani", role: "Founder", company: "Najm Tech", quote: "Finally, a lead generation tool that understands the Saudi market. The Majlis Mode tips alone are worth the subscription." }
-      ]
+      items: []
     },
     faq: {
       eyebrow: "FAQ",
@@ -194,8 +188,8 @@ export const landingTranslations = {
     },
     hero: {
       nowLive: "متاح الآن — المملكة العربية السعودية",
-      majlisMode: "وضع المجلس نشط",
-      v2030Engine: "محرك رؤية 2030 نشط",
+      majlisMode: "وضع المجلس",
+      v2030Engine: "محرك رؤية 2030",
       line1: "صُنع في المملكة.",
       line2: "من أجل المملكة.",
       line3: "أول منصة ذكاء اصطناعي لاستخبارات عملاء B2B في المملكة.",
@@ -260,14 +254,13 @@ export const landingTranslations = {
         ["إدارة علاقات العملاء", true, true],
         ["تسلسلات التواصل الآلي", true, true],
         ["تغطية سوق دول الخليج", true, false],
-        ["أسعار بالريال للشركات السعودية", true, false]
       ]
     },
     pricing: {
       eyebrow: "الأسعار",
       title1: "بسيطة،",
       title2: "أسعار شفافة.",
-      subtitle: "أرخص بـ 50-70% من وكالات توليد العملاء السعودية التقليدية.",
+      subtitle: "",
       tiers: [
         {
           name: "الاستكشاف",
@@ -337,11 +330,7 @@ export const landingTranslations = {
     testimonials: {
       eyebrow: "آراء العملاء",
       title: "موثوق به من الشركات السعودية",
-      items: [
-        { name: "أحمد الراشد", role: "المدير التنفيذي", company: "الراشد للتجارة", quote: "حول ليدجين عملية المبيعات لدينا. انتقلنا من الاتصالات الباردة إلى محادثات دافئة مع صناع القرار الذين يحتاجون فعلاً إلى خدماتنا." },
-        { name: "فاطمة الزهراني", role: "مديرة المبيعات", company: "هيلثفيرست السعودية", quote: "ساعدتنا ميزة توافق رؤية 2030 على استهداف مقدمي الرعاية الصحية المناسبين في الوقت المناسب. معدل التحويل لدينا تضاعف." },
-        { name: "محمد القحطاني", role: "المؤسس", company: "نجم تك", quote: "أخيراً، أداة توليد عملاء تفهم السوق السعودي. نصائح وضع المجلس وحدها تستحق الاشتراك." }
-      ]
+      items: []
     },
     faq: {
       eyebrow: "الأسئلة الشائعة",

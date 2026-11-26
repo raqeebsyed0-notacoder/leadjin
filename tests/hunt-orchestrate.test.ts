@@ -1,15 +1,24 @@
 /**
- * hunt-orchestrate.test.ts — Gate-1 integration test
+ * hunt-orchestrate.test.ts — Gate-1 keyless verified-lead tests
  *
- * What is stubbed:  fetchWathqLead (no WATHQ key required)
- * What runs REAL:   enrichContact (Gemini grounded search), generateBuyingSignal
- *                   (Gemini grounded), DB store + read-back (in-memory SQLite)
+ * What is stubbed:  fetchWathqLead (no WATHQ key required), the corroboration
+ *                   public-source fetch (jinaCorroborate), and the public
+ *                   search leg (tinyfishSearch). No CLI/network call is made.
+ * What runs REAL:   enrichContact, generateBuyingSignal, DB store + read-back
+ *                   (in-memory SQLite), the five-field gate and corroboration
+ *                   field/URL assembly.
  *
- * This proves the full chain: stub-WATHQ → real enrich → real signal → real DB store.
- * WATHQ live path is blocked until Raqeeb mounts the key in the container.
+ * Keyless verified-lead path:
+ *  - no googleSearch, no LLM-emitted evidence URLs; evidence URLs come only
+ *    from the two injectable legs (Jina Reader + TinyFish search).
+ *  - verified_real = all five fields present (email, person name, company
+ *    name, linkedin, hq_city) AND evidence_urls non-empty. Each field's URL
+ *    is recorded in fieldEvidence and the corroboration log.
+ *  - Wathq is optional enrichment only and never blocks a standard hunt.
+ *  - decision_maker.name is the PERSON corroborated from a public source,
+ *    never the company name.
  */
-
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { initIntelligenceSchema } from '../src/services/intelligenceHub.js';
 import { huntOrchestrate, type OrchestratorDeps } from '../src/services/huntOrchestrator.js';
@@ -17,7 +26,6 @@ import type { WathqLead as WLead } from '../src/services/wathqService.js';
 
 // ---------------------------------------------------------------------------
 // Stub WATHQ response — SABIC (real company, real domain sabic.com)
-// Using a real company means downstream Gemini enrichment genuinely runs against it.
 // ---------------------------------------------------------------------------
 const STUB_SABIC_CR = '1010010813';
 
@@ -33,18 +41,8 @@ const STUB_WATHQ_RESPONSE: WLead = {
     ecommerce: false,
   },
   decision_makers: [
-    {
-      name: 'Abdulrahman Al-Fageeh',
-      role: 'Chief Executive Officer',
-      nationality: 'Saudi',
-      kind: 'management',
-    },
-    {
-      name: 'Abdullah Al-Otaibi',
-      role: 'Chief Financial Officer',
-      nationality: 'Saudi',
-      kind: 'management',
-    },
+    { name: 'Abdulrahman Al-Fageeh', role: 'Chief Executive Officer', nationality: 'Saudi', kind: 'management' },
+    { name: 'Abdullah Al-Otaibi', role: 'Chief Financial Officer', nationality: 'Saudi', kind: 'management' },
   ],
   contact: null,
   provenance: {
@@ -55,8 +53,68 @@ const STUB_WATHQ_RESPONSE: WLead = {
   },
 };
 
+// Public-source text stubs (evidence: the Jina Reader URL fetched for the
+// candidate domain sabic.com). PERSON + COMPANY/CITY/EMAIL/LINKEDIN labels
+// make the five-field gate pass honestly (IMPL-SPEC Gap 3).
+const STUB_TEXT_FULL = (
+  `NAME: Saudi Basic Industries Corporation (SABIC)`
+  + '\n'
+  + `CITY: Riyadh`
+  + '\n'
+  + `EMAIL: ir@sabic.com`
+  + '\n'
+  + `LINKEDIN: https://www.linkedin.com/company/sabic`
+  + '\n'
+  + `COMPANY: Saudi Basic Industries Corporation (SABIC)`
+  + '\n'
+  + `PERSON: Abdulrahman Al-Fageeh`
+);
+const STUB_TEXT_NO_LINKEDIN = (
+  `NAME: Saudi Basic Industries Corporation (SABIC)`
+  + '\n'
+  + `CITY: Riyadh`
+  + '\n'
+  + `EMAIL: ir@sabic.com`
+  + '\n'
+  + `COMPANY: Saudi Basic Industries Corporation (SABIC)`
+  + '\n'
+  + `PERSON: Abdulrahman Al-Fageeh`
+);
+// Jina supplies company/linkedin/city but no email or person: those two must
+// come from the search leg for the five-field gate to pass.
+const STUB_TEXT_JINA_PARTIAL = (
+  `NAME: Saudi Basic Industries Corporation (SABIC)`
+  + '\n'
+  + `CITY: Riyadh`
+  + '\n'
+  + `LINKEDIN: https://www.linkedin.com/company/sabic`
+  + '\n'
+  + `COMPANY: Saudi Basic Industries Corporation (SABIC)`
+);
+
+const SEARCH_URL_EMAIL = 'https://www.sabic.com/en/investors/contact';
+const STUB_SEARCH_RESULTS = [
+  {
+    url: SEARCH_URL_EMAIL,
+    snippet: 'Investor relations: ir@sabic.com. Ahmed Hassan handles enquiries.',
+    title: 'SABIC Investor Contacts',
+  },
+  {
+    url: 'https://www.sabic.com/en/about/leadership',
+    snippet: 'The leadership page names Ahmed Hassan as director.',
+    title: 'SABIC Leadership',
+  },
+];
+
+const CANDIDATE = {
+  name: 'Saudi Basic Industries Corporation (SABIC)',
+  domain: 'sabic.com',
+};
+const JINA_URL = 'https://r.jina.ai/https://www.sabic.com';
+
 // ---------------------------------------------------------------------------
-// Build an in-memory SQLite DB with the full leads schema
+// Build an in-memory SQLite DB with the leads schema including the
+// keyless-verified columns: company_domain, city, evidence_urls.
 // ---------------------------------------------------------------------------
 function buildTestDb(): Database.Database {
   const db = new Database(':memory:');
@@ -83,123 +141,252 @@ function buildTestDb(): Database.Database {
       email_source TEXT DEFAULT 'gemini',
       do_not_contact INTEGER DEFAULT 0,
       stage_entered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      verified_real INTEGER DEFAULT 0,
+      provenance_url TEXT,
+      source_url TEXT,
+      majlis_tips TEXT,
+      company_domain TEXT,
+      city TEXT,
+      evidence_urls TEXT
     );
   `);
-  // Add intelligence hub columns
+  // Add intelligence hub columns (as in the real server.ts schema init).
   initIntelligenceSchema(db);
   return db;
 }
 
+// Both external deps are always stubbed: no TinyFish CLI, no network fetch.
+const noSearch = () => vi.fn().mockResolvedValue([] as typeof STUB_SEARCH_RESULTS);
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-describe('huntOrchestrate — Gate-1 integration test', () => {
+describe('huntOrchestrate — keyless verified-lead path', () => {
   let testDb: Database.Database;
 
   beforeAll(() => {
     testDb = buildTestDb();
   });
 
-  it('assembles + stores a lead end-to-end with stubbed WATHQ', async () => {
-    // Stub: WATHQ returns SABIC without needing a real key
-    const stubFetchWathq = async (_cr: string): Promise<WLead> => STUB_WATHQ_RESPONSE;
+  // Test 1: keyless public-source leg with all five fields corroborated.
+  it('yields a verified lead with stored evidence URL from the public-source leg', async () => {
+    const corroborationFetch = vi.fn().mockImplementation(async (url: string) => ({ url, text: STUB_TEXT_FULL }));
 
     const deps: OrchestratorDeps = {
-      fetchWathqLead: stubFetchWathq,
+      fetchWathqLead: async () => STUB_WATHQ_RESPONSE,   // optional enrich only
+      corroboratePublicSources: corroborationFetch,
+      searchPublicSources: noSearch(),
       enrichContact: (await import('../src/services/contactEnrichment.js')).enrichContact,
       db: testDb,
     };
 
-    // Supply the CR directly to bypass the Gemini CR-discovery step
     const result = await huntOrchestrate(
-      { sector: 'petrochemicals', geo: 'Riyadh', count: 1, crs: [STUB_SABIC_CR] },
-      deps,
-      null,
+      { sector: 'petrochemicals', geo: 'Riyadh', count: 1, candidates: [CANDIDATE] },
+      deps, null,
     );
-
-    console.log('[TEST] orchestrate result:', JSON.stringify(result, null, 2));
-
-    // ── Assert orchestration shape ─────────────────────────────────────────
-    expect(result.sector).toBe('petrochemicals');
-    expect(result.geo).toBe('Riyadh');
-    expect(result.assembled).toBe(1);
-    expect(result.leads).toHaveLength(1);
 
     const lead = result.leads[0];
 
-    // Company fields from stub
+    // No WATHQ key → never blocks.
+    expect(result.wathq_path).toBe('stubbed');
+    // Evidence URL comes ONLY from the fetched Jina Reader response.
+    expect(lead.evidence_urls).toEqual(['https://r.jina.ai/https://www.sabic.com']);
+    // Five-field gate passes honestly.
+    expect(lead.verified_real).toBe(true);
     expect(lead.company_name).toBe('Saudi Basic Industries Corporation (SABIC)');
-    expect(lead.cr_number).toBe(STUB_SABIC_CR);
     expect(lead.hq_city).toBe('Riyadh');
-    expect(lead.verified_real).toBe(false); // sandbox stub — correct
+    expect(lead.linkedin).toMatch(/linkedin\.com\/company\/sabic/);
+    expect(lead.contact.email).toMatch(/sabic\.com/);
+    // decision_maker is the PERSON, not the company.
+    expect(lead.decision_maker.name).toBe('Abdulrahman Al-Fageeh');
+    expect(lead.decision_maker.role).toBe('unknown');
 
-    // Decision maker
-    expect(lead.decision_maker.name).toBeTruthy();
-    expect(lead.decision_maker.role).toBeTruthy();
-
-    // Contact: enrichment ran (may be 'none' if no contact found, but rung must be valid)
-    const validRungsSet = ['none', 'unverified', 'mx_ok', 'probable', 'verified', 'public'];
-    expect(validRungsSet).toContain(lead.contact.email_rung);
-
-    // Signal: may be null if Gemini found nothing, but if present must have a headline
-    if (lead.signal !== null) {
-      expect(lead.signal.headline).toBeTruthy();
-    }
-
-    // Provenance URL must be set from WATHQ stub
-    expect(lead.provenance_url).toContain('wathq.sa');
-
-    // ── Assert DB store ────────────────────────────────────────────────────
-    expect(lead.stored).toBe(true);
-
+    // DB row stores the corroboration columns.
     const row = testDb.prepare(
-      'SELECT lead_id, name, company, industry, status, email_verified, lead_score FROM leads WHERE lead_id = ?',
+      'SELECT city, linkedin, evidence_urls, verified_real, company FROM leads WHERE lead_id = ?',
     ).get(lead.lead_id) as Record<string, unknown> | undefined;
-
-    console.log('[TEST] DB row:', row);
     expect(row).toBeDefined();
-    expect(row?.lead_id).toBe(lead.lead_id);
-    expect(row?.company).toBe('Saudi Basic Industries Corporation (SABIC)');
-    expect(row?.industry).toBe('petrochemicals');
-    expect(row?.status).toBe('NEW');
-    // email_rung lives on the in-memory AssembledLead, not in the DB row;
-    // already asserted above via validRungsSet check.
+    expect(row?.city).toBe('Riyadh');
+    expect(row?.linkedin).toMatch(/linkedin/);
+    expect(row?.evidence_urls).toContain('https://r.jina.ai/https://www.sabic.com');
+    expect(row?.verified_real).toBe(1);
+  }, 120_000);
 
-  }, 120_000); // allow time for real Gemini calls (domain lookup + scrape + pattern + signal)
+  // Test 2: gate keeps verified_real false when a required field is missing.
+  it('keeps verified_real false when any of the five fields is missing', async () => {
+    const corroborationFetch = vi.fn().mockImplementation(async (url: string) => ({ url, text: STUB_TEXT_NO_LINKEDIN }));
 
-  it('degrades gracefully when WATHQ_CONSUMER_KEY is not set (no crs bypass)', async () => {
-    // Remove the key for this test
-    const savedKey = process.env.WATHQ_CONSUMER_KEY;
+    const deps: OrchestratorDeps = {
+      fetchWathqLead: async () => STUB_WATHQ_RESPONSE,
+      corroboratePublicSources: corroborationFetch,
+      searchPublicSources: noSearch(),
+      enrichContact: (await import('../src/services/contactEnrichment.js')).enrichContact,
+      db: testDb,
+    };
+
+    const result = await huntOrchestrate(
+      { sector: 'petrochemicals', geo: 'Riyadh', count: 1, candidates: [CANDIDATE] },
+      deps, null,
+    );
+
+    const lead = result.leads[0];
+    expect(lead.verified_real).toBe(false);
+    expect(lead.linkedin).toBeNull();
+    expect(lead.evidence_urls).toEqual(['https://r.jina.ai/https://www.sabic.com']);
+  }, 120_000);
+
+
+  // Test 3: gate keeps verified_real false when evidence_urls is empty.
+  it('keeps verified_real false when evidence_urls is empty', async () => {
+    const corroborationFetch = vi.fn().mockResolvedValue({ url: 'https://r.jina.ai/https://example.com/', text: '' });
+
+    const deps: OrchestratorDeps = {
+      fetchWathqLead: async () => STUB_WATHQ_RESPONSE,
+      corroboratePublicSources: corroborationFetch,
+      searchPublicSources: noSearch(),
+      enrichContact: (await import('../src/services/contactEnrichment.js')).enrichContact,
+      db: testDb,
+    };
+
+    const result = await huntOrchestrate(
+      { sector: 'petrochemicals', geo: 'Riyadh', count: 1, candidates: [CANDIDATE] },
+      deps, null,
+    );
+
+    const lead = result.leads[0];
+    expect(lead.verified_real).toBe(false);
+    expect(lead.evidence_urls).toEqual([]);
+  }, 120_000);
+
+  // Test 4: graceful degrade without WATHQ_CONSUMER_KEY.
+  it('degrades gracefully when WATHQ_CONSUMER_KEY is not set', async () => {
+    const corroborationFetch = vi.fn().mockImplementation(async (url: string) => ({ url, text: STUB_TEXT_FULL }));
+
+    const deps: OrchestratorDeps = {
+      fetchWathqLead: async () => STUB_WATHQ_RESPONSE,
+      corroboratePublicSources: corroborationFetch,
+      searchPublicSources: noSearch(),
+      enrichContact: (await import('../src/services/contactEnrichment.js')).enrichContact,
+      db: testDb,
+    };
+
+    const result = await huntOrchestrate(
+      { sector: 'fintech', geo: 'Riyadh', count: 1, candidates: [CANDIDATE] },
+      deps, null,
+    );
+
+    expect(result.assembled).toBeGreaterThan(0);
+    expect(result.wathq_path).toBe('stubbed');
+    expect(result.errors).toHaveLength(0);
+  }, 15_000);
+
+  // Test 5 (Case A): five fields from two sources, each backed by a URL.
+  it('corroborates email + person from one search with per-field evidence URLs', async () => {
+    const jinaFetch = vi.fn().mockImplementation(async (url: string) => ({ url, text: STUB_TEXT_JINA_PARTIAL }));
+    const search = vi.fn().mockResolvedValue(STUB_SEARCH_RESULTS);
+
+    const deps: OrchestratorDeps = {
+      fetchWathqLead: async () => STUB_WATHQ_RESPONSE,
+      corroboratePublicSources: jinaFetch,
+      searchPublicSources: search,
+      enrichContact: (await import('../src/services/contactEnrichment.js')).enrichContact,
+      db: testDb,
+    };
+
+    const result = await huntOrchestrate(
+      { sector: 'petrochemicals', geo: 'Riyadh', count: 1, candidates: [CANDIDATE] },
+      deps, null,
+    );
+    const lead = result.leads[0];
+
+    expect(jinaFetch).toHaveBeenCalledTimes(1);
+    // Exactly ONE search per candidate, with the prescribed query shape.
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledWith('Saudi Basic Industries Corporation (SABIC) Riyadh contact email LinkedIn');
+
+    expect(lead.verified_real).toBe(true);
+    const FIELD_KEYS = ['email', 'name', 'company_name', 'linkedin', 'hq_city'] as const;
+    for (const key of FIELD_KEYS) {
+      expect(lead.fieldEvidence[key], `missing fieldEvidence.${key}`).toBeTruthy();
+      expect(lead.fieldEvidence[key]?.url).toMatch(/^https:\/\//);
+    }
+    expect(lead.fieldEvidence.email?.value).toBe('ir@sabic.com');
+    expect(lead.fieldEvidence.email?.url).toBe(SEARCH_URL_EMAIL);
+    expect(lead.fieldEvidence.name?.value).toBe('Ahmed Hassan');
+    expect(lead.fieldEvidence.name?.url).toBe(SEARCH_URL_EMAIL);
+    expect(lead.fieldEvidence.linkedin?.url).toBe(JINA_URL);
+    expect(lead.contact.email).toBe('ir@sabic.com');
+    expect(lead.decision_maker.name).toBe('Ahmed Hassan');
+
+    expect(lead.evidence_urls).toContain(JINA_URL);
+    expect(lead.evidence_urls).toContain(SEARCH_URL_EMAIL);
+
+    // Audit log carries the search input and each accepted field's URL.
+    expect(lead.corroboration_log).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'jina', url: JINA_URL, field: 'query' }),
+      expect.objectContaining({ source: 'tinyfish', url: SEARCH_URL_EMAIL, field: 'email' }),
+      expect.objectContaining({ source: 'tinyfish', url: SEARCH_URL_EMAIL, field: 'name' }),
+    ]));
+
+    const row = testDb.prepare('SELECT evidence_urls, verified_real FROM leads WHERE lead_id = ?').get(lead.lead_id) as Record<string, unknown> | undefined;
+    expect(row?.evidence_urls).toContain(SEARCH_URL_EMAIL);
+    expect(row?.verified_real).toBe(1);
+  }, 120_000);
+
+  // Test 6 (Case B): no search results → gate fails closed.
+  it('keeps verified_real false when the search returns no results', async () => {
+    const search = noSearch();
+    const deps: OrchestratorDeps = {
+      fetchWathqLead: async () => STUB_WATHQ_RESPONSE,
+      corroboratePublicSources: vi.fn().mockImplementation(async (url: string) => ({ url, text: STUB_TEXT_JINA_PARTIAL })),
+      searchPublicSources: search,
+      enrichContact: (await import('../src/services/contactEnrichment.js')).enrichContact,
+      db: testDb,
+    };
+
+    const result = await huntOrchestrate(
+      { sector: 'petrochemicals', geo: 'Riyadh', count: 1, candidates: [CANDIDATE] },
+      deps, null,
+    );
+    const lead = result.leads[0];
+
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(lead.fieldEvidence.email).toBeUndefined();
+    expect(lead.fieldEvidence.name).toBeUndefined();
+    expect(lead.contact.email).toBeNull();
+    expect(lead.verified_real).toBe(false);
+    expect(lead.evidence_urls).toEqual([JINA_URL]);
+  }, 120_000);
+
+  // Test 7 (Case C): no WATHQ key and a throwing Wathq dep still assembles.
+  it('assembles with wathq_path stubbed when the WATHQ key is absent', async () => {
+    const prevKey = process.env.WATHQ_CONSUMER_KEY;
     delete process.env.WATHQ_CONSUMER_KEY;
-
     try {
+      const throwingWathq = vi.fn().mockRejectedValue(new Error('WATHQ_CONSUMER_KEY not set'));
       const deps: OrchestratorDeps = {
-        fetchWathqLead, // real function — will throw "WATHQ_CONSUMER_KEY not set"
+        fetchWathqLead: throwingWathq as unknown as OrchestratorDeps['fetchWathqLead'],
+        corroboratePublicSources: vi.fn().mockImplementation(async (url: string) => ({ url, text: STUB_TEXT_FULL })),
+        searchPublicSources: noSearch(),
         enrichContact: (await import('../src/services/contactEnrichment.js')).enrichContact,
         db: testDb,
       };
 
-      // No crs supplied → triggers CR discovery → hits WATHQ_CONSUMER_KEY check
       const result = await huntOrchestrate(
-        { sector: 'fintech', geo: 'Riyadh', count: 2 },
-        deps,
-        null,
+        { sector: 'petrochemicals', geo: 'Riyadh', count: 1, candidates: [CANDIDATE] },
+        deps, null,
       );
 
-      console.log('[TEST] graceful-degrade result:', JSON.stringify(result, null, 2));
-
-      // Must not crash; must return 0 assembled leads and a clear error
-      expect(result.assembled).toBe(0);
-      expect(result.wathq_path).toBe('blocked');
-      expect(result.errors.length).toBeGreaterThan(0);
-      expect(result.errors[0]).toMatch(/WATHQ_CONSUMER_KEY/);
+      expect(throwingWathq).toHaveBeenCalledTimes(1);
+      expect(result.assembled).toBeGreaterThan(0);
+      expect(result.wathq_path).toBe('stubbed');
+      expect(result.errors).toHaveLength(0);
+      expect(result.leads[0].verified_real).toBe(true);
+      expect(result.leads[0].cr_number).toBeNull();
     } finally {
-      // Restore
-      if (savedKey !== undefined) process.env.WATHQ_CONSUMER_KEY = savedKey;
+      if (prevKey === undefined) delete process.env.WATHQ_CONSUMER_KEY;
+      else process.env.WATHQ_CONSUMER_KEY = prevKey;
     }
-  }, 15_000);
+  }, 120_000);
 });
-
-// Re-export fetchWathqLead for the graceful-degrade test without triggering the real call
-import { fetchWathqLead } from '../src/services/wathqService.js';

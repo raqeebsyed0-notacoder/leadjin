@@ -15,7 +15,7 @@
  * All data is 100% from public sources. Legitimate. No scraping private data.
  */
 
-import { GoogleGenAI } from '@google/genai';
+
 import dns from 'dns/promises';
 import { getGenAI } from './genaiClient.js';
 import net from 'net';
@@ -336,7 +336,7 @@ export async function crawlCityIndustry(
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'flash',
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],

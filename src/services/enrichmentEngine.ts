@@ -27,7 +27,7 @@ function verdictToConfidence(status: EmailVerdictStatus): number {
 }
 import { discoverPhone, verifyWhatsApp, normalizePhoneNumber, type PhoneDiscoveryResult } from './phoneDiscovery.js';
 import { getCachedResult, setCachedResult } from './enrichmentCache.js';
-import { GoogleGenAI } from '@google/genai';
+
 import { getGenAI } from './genaiClient.js';
 
 // ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ Return ONLY valid JSON (no markdown):
 {"email": "personal email or null", "company_email": "generic fallback or null", "phone": "phone or null", "linkedinUrl": "URL or null", "sources": ["url1"]}`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'flash',
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],

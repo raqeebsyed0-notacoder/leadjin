@@ -5,8 +5,31 @@
  * Powered by Gemini 1.5 Flash for fast classification and response drafting.
  */
 
-import { GoogleGenAI } from '@google/genai';
-import { getGenAI } from './genaiClient.js';
+import { jsonrepair } from 'jsonrepair';
+
+// ---------------------------------------------------------------------------
+// AI text cleaning helpers (F-21..F-25). Strip markdown/code fences so no raw
+// model output or fences reach callers, and tolerate loose JSON.
+// ---------------------------------------------------------------------------
+
+function cleanModelText(text: string): string {
+  let t = text.trim();
+  t = t.replace(/^```[a-zA-Z0-9_-]*\n?/gm, '').trim();
+  t = t.replace(/\n?```$/gm, '').trim();
+  return t;
+}
+
+function cleanJsonResponse(text: string): string {
+  let t = text.trim();
+  t = t.replace(/^```[a-zA-Z0-9_-]*\n?/gm, '').trim();
+  t = t.replace(/\n?```$/gm, '').trim();
+  try {
+    return jsonrepair(t);
+  } catch (e) {
+    return t;
+  }
+}
+import { getGenAI, type GenAIClient } from './genaiClient.js';
 
 export type ReplyCategory = 'INTERESTED' | 'NOT_INTERESTED' | 'OOO' | 'QUESTION' | 'REFERRAL';
 
@@ -35,7 +58,7 @@ export interface ClassifyOptions {
 }
 
 export class ProtocolManager {
-  private ai: GoogleGenAI;
+  private ai: GenAIClient;
   private apiKey: string;
 
   constructor(apiKey: string) {
@@ -106,14 +129,13 @@ Response guidelines by category:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'flash',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });
       
       const text = response.text || '';
-      const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
-      const parsed = JSON.parse(cleaned);
+      const parsed = JSON.parse(cleanJsonResponse(text));
 
       // Ensure category is valid
       const validCategories: ReplyCategory[] = ['INTERESTED', 'NOT_INTERESTED', 'OOO', 'QUESTION', 'REFERRAL'];
@@ -255,7 +277,7 @@ Email body:`;
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'flash',
         contents: prompt
       });
       
@@ -295,7 +317,7 @@ Email body:`;
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'flash',
         contents: prompt
       });
       
@@ -332,14 +354,13 @@ Respond with JSON:
 
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'flash',
         contents: prompt,
         config: { responseMimeType: 'application/json' }
       });
       
       const text = response.text || '';
-      const cleaned = text.replace(/```json\n?|\n?```/g, '').trim();
-      return JSON.parse(cleaned);
+      return JSON.parse(cleanJsonResponse(text));
     } catch (error: any) {
       console.error('[ProtocolManager] Referral extraction failed:', error.message);
       return { confidence: 0 };

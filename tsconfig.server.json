@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "isolatedModules": true,
@@ -16,6 +16,6 @@
     "declaration": false,
     "noEmit": false
   },
-  "include": ["server.ts", "src/services/**/*"],
-  "exclude": ["node_modules", "dist", "android", "ios"]
+  "include": ["server.ts", "src/services/**/*", "src/types/**/*"],
+  "exclude": ["node_modules", "dist", "android", "ios", "workers/whatsapp-bridge"]
 }

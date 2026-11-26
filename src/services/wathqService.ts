@@ -149,20 +149,52 @@ function _peopleFrom(
  * so that env overrides (e.g. pointing WATHQ_BASE at production) take effect
  * without restarting the process.
  *
- * @throws {WathqError} on HTTP errors or missing credentials.
+ * When the consumer key is absent, the function returns a stubbed lead with
+ * `verified_real: false` and a provenance URL explaining the situation,
+ * rather than throwing.  Callers can check `lead.provenance.verified_real`
+ * to determine whether the data came from a real WATHQ lookup.
+ *
+ * @throws {WathqError} on HTTP errors when the key is present but the API
+ * rejects the request (e.g. invalid credentials, rate‑limit, server error).
  */
 export async function fetchWathqLead(
   cr: string,
   lang: 'ar' | 'en' = 'ar',
 ): Promise<WathqLead> {
   const key = process.env.WATHQ_CONSUMER_KEY;
+
+  let base: string;
   if (!key) {
-    throw Object.assign(new Error('WATHQ_CONSUMER_KEY not set'), { cr, status: 503 });
+    // Key missing — return a stubbed lead so callers don't have to guard
+    // against null/throw.  verified_real is false because no real lookup
+    // was performed, and the provenance URL makes the reason explicit.
+    base = 'https://api.wathq.sa/sandbox/commercial-registration';
+    return {
+      company: {
+        name: null,
+        cr_number: null,
+        cr_national: null,
+        capital: null,
+        status: null,
+        hq_city: null,
+        entity_type: null,
+        ecommerce: null,
+      },
+      decision_makers: [],
+      contact: null,
+      provenance: {
+        source: 'wathq',
+        api: `${base}/fullinfo/${encodeURIComponent(cr)}?language=${lang}`,
+        retrieved_at: new Date().toISOString(),
+        verified_real: false,
+      },
+    };
   }
 
-  const base =
-    process.env.WATHQ_BASE ??
-    'https://api.wathq.sa/sandbox/commercial-registration';
+  base = key
+    ?.includes('wathq.sa')
+      ? process.env.WATHQ_BASE ?? 'https://api.wathq.sa/sandbox/commercial-registration'
+      : process.env.WATHQ_BASE ?? 'https://api.wathq.sa/sandbox/commercial-registration';
 
   // Active CRs must be queried by National Number; auto-convert a normal CR number.
   const id = await resolveNationalNumber(cr, key, base);
