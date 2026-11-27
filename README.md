@@ -32,8 +32,7 @@ from accept/reject.
 
 Waterfall: cache → Google Places (key present; returns name, address, phone, website, place_id — **no
 email, no people**) → Wathq (optional, needs known CRs) → preserved legacy engines (June five-engine line)
-→ local model. People are found by the contact-harvest leg: site team/contact pages, social bios, Hunter
-domain search, and public LinkedIn profiles through indexed search — **never a LinkedIn cookie or a
+→ local model. People are found by the contact-harvest leg: site team/contact pages, social bios, and public LinkedIn profiles through indexed search — **never a LinkedIn cookie or a
 logged-in session** — then MX/SMTP verification. Every field keeps its source URL and timestamp.
 See `docs/LEAD-DISCOVERY.md`, `docs/DISCOVERY-ENGINES.md`, `docs/TRIPLE-VERIFICATION.md`.
 
@@ -78,7 +77,7 @@ Gates: `npx tsc --noEmit` → 0; `curl -s http://127.0.0.1:3001/api/health` → 
 Environment-driven; no credentials in this repository. The ones that matter:
 `PORT`, `DATABASE_PATH`, `LEADJIN_PROVIDER` (`ollama`|`byok`), `LEADJIN_MODEL`, `SMTP_*`,
 `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (Gmail + Calendar), `GOOGLE_PLACES_API_KEY` (optional enhancer),
-`WATHQ_API_KEY` (optional, own-business use only), `HUNTER_API_KEY` (optional), `WHATSAPP_TOKEN`/
+`WATHQ_API_KEY` (optional, own-business use only), `WHATSAPP_TOKEN`/
 `WHATSAPP_PHONE_ID`, `LEADJIN_ADMIN_SECRET`. **No key is mandatory for the local-model experience.**
 
 ## What this repository is not
