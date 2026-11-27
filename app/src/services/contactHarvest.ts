@@ -554,7 +554,7 @@ async function tinyfishLeg(
       continue; // malformed JSON from the CLI — degrade to the next query.
     }
 
-    for (const r of parsed) {
+    for (const r of parsed ?? []) {
       const url = String(r?.url ?? "");
       const snippet = String(r?.snippet ?? "");
       const title = String(r?.title ?? "");

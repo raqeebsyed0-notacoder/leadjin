@@ -576,7 +576,7 @@ function normaliseWathqRow(raw: unknown, industry: string): NormalizedLead {
     verified_real: 0,
     provenance_url:
       row.provenance && typeof row.provenance === "object"
-        ? (row.provenance as Record<string, unknown>).api as string | undefined
+        ? (((row.provenance as Record<string, unknown>).api as string | undefined) ?? null)
         : null,
     discovered_at: new Date().toISOString(),
     raw,

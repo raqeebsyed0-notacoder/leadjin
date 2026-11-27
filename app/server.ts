@@ -46,8 +46,8 @@ import { craftOutreach, type LeadProfile, type OutreachContext } from './src/ser
 import { ProtocolManager, type ClassifyOptions } from './src/services/protocolManager.js';
 import { verifyEmailSMTP, verifyPhoneHLR, verifyRegionalHQ } from './src/services/jinHandsVerifier.js';
 import { getHuntBus } from './src/services/jinHuntStream.js';
-import { 
-  initIntelligenceSchema, 
+import {
+  initIntelligenceSchema,
   setIntelligenceDatabase,
   updateLeadIntelligence,
   getLeadPipeline,
@@ -243,17 +243,17 @@ function getApproximateHijriDate(gregorianDate: Date): { year: number; month: nu
   // Reference: 2026-02-18 is expected to be ~1 Ramadan 1448
   const referenceDate = new Date('2026-02-18');
   const referenceHijri = { year: 1448, month: 1, day: 1 }; // 1 Ramadan 1448
-  
+
   const diffMs = gregorianDate.getTime() - referenceDate.getTime();
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  
+
   // Approximate Hijri days (354 days/year)
   const hijriDays = diffDays * (365 / 354);
-  
+
   let newYear = referenceHijri.year;
   let newMonth = referenceHijri.month;
   let newDay = referenceHijri.day + Math.floor(hijriDays);
-  
+
   // Normalize days/months
   const daysInMonth = 30; // Approximate (Hijri months alternate 29/30)
   while (newDay > daysInMonth) {
@@ -272,7 +272,7 @@ function getApproximateHijriDate(gregorianDate: Date): { year: number; month: nu
     }
     newDay += daysInMonth;
   }
-  
+
   return { year: newYear, month: newMonth, day: newDay };
 }
 
@@ -287,28 +287,28 @@ function getRamadanDatesForYear(year: number): { ramadanStart: Date; ramadanEnd:
       eidEnd: new Date(RAMADAN_CONFIG.eidEnd),
     };
   }
-  
+
   // Dynamic calculation: Ramadan is month 9 in Hijri calendar
   // Find approximate Gregorian date for 1 Ramadan of given year
   // 1 Ramadan 1448 ≈ 2026-02-18 (difference of ~33 Hijri years from 2026)
   const hijriYear = 1448 + (year - 2026);
   const approxStart = new Date(year, 1, 18); // Feb 18 baseline
-  
+
   // Adjust for year offset (354-day Hijri year drifts ~11 days earlier each Gregorian year)
   const yearDiff = year - 2026;
   const driftDays = yearDiff * 11; // ~11 days earlier per year
   approxStart.setDate(approxStart.getDate() - driftDays);
-  
+
   // Ramadan lasts 29-30 days, Eid is 1-3 days after
   const ramadanStart = new Date(approxStart);
   const ramadanEnd = new Date(ramadanStart);
   ramadanEnd.setDate(ramadanEnd.getDate() + 29); // 30 days of Ramadan
-  
+
   const eidStart = new Date(ramadanEnd);
   eidStart.setDate(eidStart.getDate() + 1);
   const eidEnd = new Date(eidStart);
   eidEnd.setDate(eidEnd.getDate() + 3); // 4 days of Eid
-  
+
   return { ramadanStart, ramadanEnd, eidStart, eidEnd };
 }
 
@@ -361,8 +361,8 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'", "https:"], // allow Google Fonts and other external styles
       styleSrcElem: ["'self'", "'unsafe-inline'", "https:"],
       imgSrc: ["'self'", "data:", "blob:", "https:"],
-      connectSrc: process.env.NODE_ENV === 'production' 
-        ? ["'self'", process.env.APP_URL || ''].filter(Boolean) 
+      connectSrc: process.env.NODE_ENV === 'production'
+        ? ["'self'", process.env.APP_URL || ''].filter(Boolean)
         : ["'self'", "ws://localhost:*", "wss://localhost:*", "http://localhost:*", "https://localhost:*"],
       fontSrc: ["'self'", "data:", "https:"], // Google Fonts
       objectSrc: ["'none'"],
@@ -1200,28 +1200,28 @@ function gregorianToHijri(date: Date): { year: number; month: number; day: numbe
   const gregYear = date.getFullYear();
   const gregMonth = date.getMonth() + 1;
   const gregDay = date.getDate();
-  
+
   // Julian day number
   let jd = Math.floor((1461 * (gregYear + 4800 + Math.floor((gregMonth - 14) / 12))) / 4) +
            Math.floor((367 * (gregMonth - 2 - 12 * Math.floor((gregMonth - 14) / 12))) / 12) -
            Math.floor((3 * Math.floor((gregYear + 4900 + Math.floor((gregMonth - 14) / 12)) / 100)) / 4) +
            gregDay - 32075;
-  
+
   // Approximate Hijri date
   let l = jd - 1948440 + 10632;
   let n = Math.floor((l - 1) / 10631);
   l = l - 10631 * n + 354;
   let j = (Math.floor((10985 - l) / 5316)) * (Math.floor((50 * l) / 17719)) + (Math.floor(l / 5670)) * (Math.floor((43 * l) / 15238));
   l = l - (Math.floor((30 - j) / 15)) * (Math.floor((17719 * j) / 50)) - (Math.floor(j / 16)) * (Math.floor((15238 * j) / 43)) + 29;
-  
+
   const hijriMonth = Math.floor((24 * l) / 709);
   const hijriDay = l - Math.floor((709 * hijriMonth) / 24);
   const hijriYear = 30 * n + j - 30;
-  
+
   // Arabic numerals
   const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
   const toArabic = (n: number) => n.toString().split('').map(d => arabicDigits[parseInt(d)]).join('');
-  
+
   return {
     year: hijriYear,
     month: hijriMonth,
@@ -1372,7 +1372,7 @@ function sanitizeHtml(html: string): string {
     if (!ALLOWED_TAGS.includes(lowerTag)) {
       return ''; // Remove disallowed tags
     }
-    
+
     // Parse and filter attributes
     const allowedAttrs: string[] = [];
     const attrRegex = /([a-zA-Z-]+)=["']([^"']*)["']/g;
@@ -1391,7 +1391,7 @@ function sanitizeHtml(html: string): string {
         }
       }
     }
-    
+
     const attrStr = allowedAttrs.length > 0 ? ' ' + allowedAttrs.join(' ') : '';
     return `<${match.startsWith('</') ? '/' : ''}${lowerTag}${attrStr}>`;
   });
@@ -1407,10 +1407,10 @@ app.post("/api/auth/register", async (req, res) => {
   if (password.length < 8) return res.status(400).json({ error: "password must be at least 8 characters" });
   const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
   if (existing) return res.status(409).json({ error: "email already registered" });
-  
+
   const password_hash = await hashPassword(password);
   const founder = isFounder(email);
-  
+
   // Founder gets instant elevation
   if (founder) {
     db.prepare("INSERT INTO users (email, password_hash, subscription_plan, monthly_searches_limit, plan, is_founder, is_admin, ramadan_override) VALUES (?, ?, 'founder', -1, 'founder', 1, 1, 1)").run(email, password_hash);
@@ -1419,7 +1419,7 @@ app.post("/api/auth/register", async (req, res) => {
     const trialEnds = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').split('.')[0];
     db.prepare("INSERT INTO users (email, password_hash, subscription_plan, monthly_searches_limit, plan, trial_ends_at) VALUES (?, ?, 'trial', -1, 'trial', ?)").run(email, password_hash, trialEnds);
   }
-  
+
   const user = db.prepare("SELECT id, email, subscription_plan, monthly_searches_used, monthly_searches_limit, subscription_expires_at, trial_ends_at, plan, is_founder, is_admin, ramadan_override FROM users WHERE email = ?").get(email) as any;
 
   // Grant 50 trial enrichment credits to new non-founder users
@@ -1630,17 +1630,17 @@ setInterval(() => {
 const getUserFromTokenCached = (req: express.Request): any | null => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return null;
-  
+
   // Check cache first
   const cached = sessionCache.get(token);
   if (cached && cached.expires > Date.now()) {
     return cached.user;
   }
-  
+
   // Cache miss - query DB
   const session = db.prepare("SELECT * FROM sessions WHERE token = ? AND expires_at > datetime('now')").get(token) as any;
   if (!session) return null;
-  
+
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(session.user_id);
   if (user) {
     // Store in cache
@@ -1723,14 +1723,14 @@ const requireAdmin = (req: express.Request, res: express.Response): boolean => {
   const adminSecret = process.env.LEADJIN_ADMIN_SECRET;
   if (!adminSecret) { res.status(503).json({ error: "admin access not configured — set LEADJIN_ADMIN_SECRET" }); return false; }
   if (!safeSecretEqual(req.headers['x-admin-secret'], adminSecret)) { res.status(403).json({ error: "forbidden" }); return false; }
-  
+
   // Also require authenticated user with is_admin flag
   const user = getUserFromTokenCached(req);
   if (!user || !user.is_admin) {
     res.status(403).json({ error: "admin access requires authenticated admin user" });
     return false;
   }
-  
+
   return true;
 };
 
@@ -1831,28 +1831,28 @@ function getOAuth2Client(userId: number): any {
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
     return null;
   }
-  
+
   if (!oauth2Clients.has(userId)) {
     const client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
       getRedirectUri()
     );
-    
+
     // Save refreshed tokens automatically - scoped to user
     client.on('tokens', (tokens: any) => {
       db.prepare(`
-        UPDATE google_tokens SET 
+        UPDATE google_tokens SET
           access_token = COALESCE(?, access_token),
           refresh_token = COALESCE(?, refresh_token),
           expiry_date = COALESCE(?, expiry_date)
         WHERE user_id = ?
       `).run(tokens.access_token, tokens.refresh_token, tokens.expiry_date, userId);
     });
-    
+
     oauth2Clients.set(userId, client);
   }
-  
+
   return oauth2Clients.get(userId);
 }
 
@@ -1966,7 +1966,7 @@ You have NO live web access in this environment — do not claim to have searche
       console.warn('[Enrichment] Domain lookup failed:', (e as Error).message);
     }
   }
-  
+
   // Fallback: simple domain guess (improved)
   if (!domain && lead.company) {
     domain = lead.company.toLowerCase()
@@ -2057,10 +2057,10 @@ async function smtpVerify(email: string, domain: string): Promise<boolean> {
     console.warn(`[SMTP] Rate limit exceeded for email verification: ${email}`);
     return false;
   }
-  
+
   recordSmtpProbe();
   console.log(`[SMTP] Probing ${email} via MX of ${domain}`);
-  
+
   try {
     const mxRecords = await dns.resolveMx(domain);
     if (!mxRecords || mxRecords.length === 0) {
@@ -2114,11 +2114,11 @@ async function verifyWebsite(url: string): Promise<{reachable: boolean, status: 
   if (!url || !url.startsWith('http')) {
     return { reachable: false, status: 0, finalUrl: url };
   }
-  
+
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    
+
     const response = await fetch(url, {
       method: 'HEAD',
       signal: controller.signal,
@@ -2127,9 +2127,9 @@ async function verifyWebsite(url: string): Promise<{reachable: boolean, status: 
         'User-Agent': 'Mozilla/5.0 (compatible; LeadJin/1.0; +https://leadjin.app)'
       }
     });
-    
+
     clearTimeout(timeout);
-    
+
     return {
       reachable: response.ok,
       status: response.status,
@@ -2140,7 +2140,7 @@ async function verifyWebsite(url: string): Promise<{reachable: boolean, status: 
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
-      
+
       const response = await fetch(url, {
         method: 'GET',
         signal: controller.signal,
@@ -2149,9 +2149,9 @@ async function verifyWebsite(url: string): Promise<{reachable: boolean, status: 
           'User-Agent': 'Mozilla/5.0 (compatible; LeadJin/1.0; +https://leadjin.app)'
         }
       });
-      
+
       clearTimeout(timeout);
-      
+
       return {
         reachable: response.ok,
         status: response.status,
@@ -2183,9 +2183,9 @@ If no LinkedIn profile found, return NULL. You have NO live web access here — 
       model: resolveModel(LEADJIN_PROVIDER),
       contents: searchPrompt,
     });
-    
+
     const raw = (searchRes.text || '').trim();
-    
+
     // Extract LinkedIn URL from response
     const linkedinMatch = raw.match(/https:\/\/(?:www\.)?linkedin\.com\/in\/[^\s"<>]+/i);
     if (linkedinMatch) {
@@ -2195,7 +2195,7 @@ If no LinkedIn profile found, return NULL. You have NO live web access here — 
         return url;
       }
     }
-    
+
     return null;
   } catch (e: any) {
     console.warn('[LinkedIn Discovery] Failed:', (e as Error).message);
@@ -2531,7 +2531,7 @@ app.post("/api/leads/harvest", async (req, res) => {
   if (!isFounder(fresh.email) && fresh.monthly_searches_limit !== -1 && fresh.monthly_searches_used >= fresh.monthly_searches_limit) {
     return res.status(429).json({ error: "monthly search quota exceeded", used: fresh.monthly_searches_used, limit: fresh.monthly_searches_limit });
   }
-  
+
   // Use user's Gemini API key if available (except for founder who uses server key)
   let apiKey = process.env.API_KEY;
   let usingPersonalKey = false;
@@ -2539,7 +2539,7 @@ app.post("/api/leads/harvest", async (req, res) => {
     apiKey = decryptApiKey(fresh.api_key);
     usingPersonalKey = true;
   }
-  
+
   // Validate required fields
   const { searchParams } = req.body;
   if (!searchParams) return res.status(400).json({ error: "searchParams required" });
@@ -2550,7 +2550,7 @@ app.post("/api/leads/harvest", async (req, res) => {
   if (!searchParams.userServices || searchParams.userServices.trim() === '') {
     return res.status(400).json({ error: "userServices is required" });
   }
-  
+
   try {
     // Layer 0 - single shared discovery pipeline: cache -> Places -> Wathq ->
     // model-driven discovery -> assemble. Every stage is skipped cleanly when
@@ -2590,6 +2590,7 @@ app.post("/api/leads/harvest", async (req, res) => {
     });
     while (harvestJobs.size > 50) {
       const oldest = harvestJobs.keys().next().value;
+      if (oldest === undefined) break;
       harvestJobs.delete(oldest);
     }
 
@@ -2670,6 +2671,7 @@ const harvestJobs = new Map<string, HarvestJob>();
 function pruneHarvestJobs(): void {
   while (harvestJobs.size > 50) {
     const oldest = harvestJobs.keys().next().value;
+    if (oldest === undefined) break;
     harvestJobs.delete(oldest);
   }
 }
@@ -3474,22 +3476,22 @@ app.get("/api/enrichment/stats", async (req, res) => {
 app.post("/api/leads/verify-website", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { lead_id, website } = req.body;
   if (!lead_id || !website) {
     return res.status(400).json({ error: "lead_id and website required" });
   }
-  
+
   try {
     const result = await verifyWebsite(website);
-    
+
     // Update DB
     db.prepare("UPDATE leads SET website_verified = ?, website_status = ? WHERE lead_id = ? AND user_id = ?")
       .run(result.reachable ? 1 : 0, result.status, lead_id, user.id);
-    
-    res.json({ 
-      lead_id, 
-      website_verified: result.reachable, 
+
+    res.json({
+      lead_id,
+      website_verified: result.reachable,
       website_status: result.status,
       final_url: result.finalUrl
     });
@@ -3522,30 +3524,30 @@ app.post("/api/verify-lead", async (req, res) => {
 app.post("/api/leads/enrich-linkedin", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const fresh = db.prepare("SELECT email, api_key, is_founder FROM users WHERE id = ?").get(user.id) as any;
   let apiKey = process.env.API_KEY;
   if (!fresh.is_founder && fresh.api_key) {
     apiKey = decryptApiKey(fresh.api_key);
   }
-  
+
   const { lead_id, name, company } = req.body;
   if (!lead_id || !name || !company) {
     return res.status(400).json({ error: "lead_id, name, and company required" });
   }
-  
+
   try {
     const linkedinUrl = await discoverLinkedIn(name, company, apiKey ?? '');
-    
+
     if (linkedinUrl) {
       // Update DB
       db.prepare("UPDATE leads SET linkedin = ? WHERE lead_id = ? AND user_id = ?")
         .run(linkedinUrl, lead_id, user.id);
     }
-    
-    res.json({ 
-      lead_id, 
-      linkedin: linkedinUrl 
+
+    res.json({
+      lead_id,
+      linkedin: linkedinUrl
     });
   } catch (err: any) {
     res.status(500).json({ error: "internal server error" });
@@ -3585,19 +3587,19 @@ app.post("/api/hunt", async (req, res) => {
   const user = getUserFromTokenCached(req);
   if (!user) return res.status(401).json({ error: 'Authentication required' });
   const { domain, linkedinCookie, maxExecutives } = req.body;
-  
+
   if (!domain || typeof domain !== "string") {
     return res.status(400).json({ error: "domain is required (e.g., retal.com.sa)" });
   }
-  
+
   // Validate domain format
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]*(.[a-zA-Z0-9][a-zA-Z0-9-]*)+$/;
   if (!domainRegex.test(domain)) {
     return res.status(400).json({ error: "Invalid domain format" });
   }
-  
+
   console.log(`[API/Hunt] Strategic entity hunt requested for: ${domain}`);
-  
+
   try {
     const result = await huntExecutives(domain, linkedinCookie, maxExecutives || 3);
     res.json(result);
@@ -3754,7 +3756,7 @@ app.get("/api/templates", (req, res) => {
   try {
     // Get user's templates + global defaults
     const templates = db.prepare(`
-      SELECT * FROM email_templates 
+      SELECT * FROM email_templates
       WHERE user_id = ? OR user_id IS NULL
       ORDER BY user_id DESC, created_at DESC
     `).all(user.id);
@@ -3838,12 +3840,12 @@ if (smtpHost && smtpPort && smtpUser && smtpPass) {
 // Inject tracking pixel and wrap links for tracking
 function injectEmailTracking(body: string, emailQueueId: number): string {
   const appUrl = process.env.APP_URL || 'http://localhost:3000';
-  
+
   // Add tracking pixel before closing body tag
   const trackingPixel = `<img src="${appUrl}/api/email/track/${emailQueueId}/open" width="1" height="1" alt="" style="display:none;" />`;
-  
+
   let trackedBody = body;
-  
+
   // Wrap links with tracking
   trackedBody = trackedBody.replace(/<a\s+([^>]*?)href=["']([^"']+)["']([^>]*)>/gi, (match, preAttrs, url, postAttrs) => {
     // Skip unsubscribe and tracking links
@@ -3853,7 +3855,7 @@ function injectEmailTracking(body: string, emailQueueId: number): string {
     const trackedUrl = `${appUrl}/api/email/track/${emailQueueId}/click?url=${encodeURIComponent(url)}`;
     return `<a ${preAttrs}href="${trackedUrl}"${postAttrs}>`;
   });
-  
+
   // Insert tracking pixel
   if (trackedBody.includes('</body>')) {
     trackedBody = trackedBody.replace('</body>', `${trackingPixel}</body>`);
@@ -3862,7 +3864,7 @@ function injectEmailTracking(body: string, emailQueueId: number): string {
   } else {
     trackedBody = trackedBody + trackingPixel;
   }
-  
+
   return trackedBody;
 }
 
@@ -3872,15 +3874,15 @@ function addUnsubscribeFooter(body: string, toEmail: string): string {
   // HMAC-based unsubscribe token — prevents length-extension attacks vs plain hash(email+secret)
   const unsubscribeToken = createHmac('sha256', process.env.LEADJIN_ADMIN_SECRET || 'leadjin-unsubscribe-fallback').update(toEmail).digest('hex').slice(0, 16);
   const unsubscribeUrl = `${appUrl}/unsubscribe?email=${encodeURIComponent(toEmail)}&token=${unsubscribeToken}`;
-  
+
   const footer = `
     <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; font-size: 11px; color: #9ca3af;">
       <p>This email was sent via LEADJIN outreach platform.</p>
-      <p><a href="${unsubscribeUrl}" style="color: #6b7280;">Unsubscribe</a> | 
+      <p><a href="${unsubscribeUrl}" style="color: #6b7280;">Unsubscribe</a> |
       <a href="${appUrl}/privacy" style="color: #6b7280;">Privacy Policy</a></p>
     </div>
   `;
-  
+
   // If body already has HTML structure, insert before closing body/html, otherwise wrap
   if (body.includes('</body>')) {
     return body.replace('</body>', `${footer}</body>`);
@@ -3938,14 +3940,14 @@ function isIslamicHolidayPause(): boolean {
 async function processEmailQueue() {
   // N1: Skip during Ramadan/Eid (unless user has override - checked per email below)
   const isHoliday = isIslamicHolidayPause();
-  
+
   // First: Process system emails (password reset, etc.) via SMTP fallback
   // These have lead_id = 'system' and don't require Google OAuth
   const systemEmails = db.prepare(`
     SELECT eq.*, u.email as user_email, u.id as token_user_id
     FROM email_queue eq
     INNER JOIN users u ON u.id = eq.user_id
-    WHERE eq.status = 'PENDING' 
+    WHERE eq.status = 'PENDING'
     AND eq.lead_id = 'system'
     AND eq.attempt_count < 3
     AND (eq.scheduled_at IS NULL OR eq.scheduled_at <= datetime('now'))
@@ -3972,10 +3974,10 @@ async function processEmailQueue() {
         db.prepare("UPDATE email_queue SET status = 'FAILED', last_error = 'SMTP not configured' WHERE id = ?").run(email.id);
         continue;
       }
-      
+
       // Update last_attempt_at
       db.prepare("UPDATE email_queue SET last_attempt_at = CURRENT_TIMESTAMP WHERE id = ?").run(email.id);
-      
+
       // Sanitize, add tracking, and send via SMTP (system emails don't use Gmail OAuth)
       const sanitizedBody = sanitizeHtml(email.body);
       const bodyWithTracking = injectEmailTracking(sanitizedBody, email.id);
@@ -3992,7 +3994,7 @@ async function processEmailQueue() {
     } catch (error: any) {
       console.error(`[EmailWorker] Failed to send system email ${email.id}:`, error.message);
       db.prepare("UPDATE email_queue SET attempt_count = COALESCE(attempt_count, 0) + 1, last_error = ? WHERE id = ?").run(error.message, email.id);
-      
+
       const updated = db.prepare("SELECT attempt_count FROM email_queue WHERE id = ?").get(email.id) as any;
       if (updated && updated.attempt_count >= 3) {
         db.prepare("UPDATE email_queue SET status = 'FAILED' WHERE id = ?").run(email.id);
@@ -4000,7 +4002,7 @@ async function processEmailQueue() {
       }
     }
   }
-  
+
   // Second: Process user emails via Google OAuth (or SMTP fallback)
   // Join with leads to check do_not_contact flag
   const pending = db.prepare(`
@@ -4008,9 +4010,9 @@ async function processEmailQueue() {
     FROM email_queue eq
     LEFT JOIN google_tokens gt ON gt.user_id = eq.user_id
     LEFT JOIN leads l ON l.lead_id = eq.lead_id AND l.user_id = eq.user_id
-    WHERE eq.status = 'PENDING' 
+    WHERE eq.status = 'PENDING'
     AND eq.lead_id != 'system'
-    AND eq.attempt_count < 3 
+    AND eq.attempt_count < 3
     AND (eq.scheduled_at IS NULL OR eq.scheduled_at <= datetime('now'))
     AND (l.do_not_contact IS NULL OR l.do_not_contact != 1)
     AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email = eq.to_email COLLATE NOCASE)
@@ -4038,13 +4040,13 @@ async function processEmailQueue() {
           continue; // Skip this email
         }
       }
-      
+
       // Update last_attempt_at only (attempt_count is incremented on failure)
       db.prepare("UPDATE email_queue SET last_attempt_at = CURRENT_TIMESTAMP WHERE id = ?").run(email.id);
-      
+
       // Use user's OAuth client if available
       const oauth2Client = email.token_user_id ? getOAuth2Client(email.token_user_id) : null;
-      
+
       if (email.access_token && oauth2Client) {
         // Send via Gmail API
         oauth2Client.setCredentials({
@@ -4098,19 +4100,19 @@ async function processEmailQueue() {
       }
 
       db.prepare("UPDATE email_queue SET status = 'SENT', sent_at = CURRENT_TIMESTAMP WHERE id = ?").run(email.id);
-      
+
       db.prepare("INSERT INTO activity_log (lead_id, user_id, type, description) VALUES (?, ?, ?, ?)").run(
         email.lead_id,
         email.user_id,
         "EMAIL_SENT",
         `Email sent: ${email.subject}`
       );
-      
+
       console.log(`[EmailWorker] Email ${email.id} sent successfully`);
     } catch (error: any) {
       console.error(`[EmailWorker] Failed to send email ${email.id}:`, error.message);
       db.prepare("UPDATE email_queue SET attempt_count = COALESCE(attempt_count, 0) + 1, last_error = ? WHERE id = ?").run(error.message, email.id);
-      
+
       // If 3 failed attempts, mark as FAILED
       const updated = db.prepare("SELECT attempt_count FROM email_queue WHERE id = ?").get(email.id) as any;
       if (updated && updated.attempt_count >= 3) {
@@ -4149,17 +4151,17 @@ app.get("/api/auth/google", (req, res) => {
 app.get("/api/auth/google/callback", async (req, res) => {
   if (!process.env.GOOGLE_CLIENT_ID) return res.status(503).send("Google OAuth not configured");
   const { code } = req.query;
-  
+
   const tempClient = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
     getRedirectUri()
   );
-  
+
   try {
     const { tokens } = await tempClient.getToken(code as string);
     tempClient.setCredentials(tokens);
-    
+
     // Get user email
     const oauth2 = google.oauth2({ version: 'v2', auth: tempClient });
     const userInfo = await oauth2.userinfo.get();
@@ -4258,7 +4260,7 @@ app.post("/api/auth/google/test", async (req: express.Request, res: express.Resp
 
     const oauth2Client = getOAuth2Client(user.id);
     if (!oauth2Client) return res.status(503).json({ error: "Google OAuth not configured" });
-    
+
     oauth2Client.setCredentials({
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
@@ -4266,7 +4268,7 @@ app.post("/api/auth/google/test", async (req: express.Request, res: express.Resp
     });
 
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-    
+
     // HARD GATE: even the self-test send is subject to address suppression.
     const gate = assertSendable(db, tokens.user_email);
     if (!gate.ok) {
@@ -4279,7 +4281,7 @@ app.post("/api/auth/google/test", async (req: express.Request, res: express.Resp
     // Send a test email to the user themselves
     const subject = "LEADJIN Connection Test";
     const body = `Hello ${tokens.user_name},\n\nYour Google Workspace connection is active and ready for autonomous outreach.\n\nBest,\nLEADJIN Engine`;
-    
+
     const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
     const messageParts = [
       `From: ${tokens.user_name} <${tokens.user_email}>`,
@@ -4323,13 +4325,13 @@ app.get("/api/leads", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
   const leads = db.prepare(`
-    SELECT 
-      l.*, 
+    SELECT
+      l.*,
       ROUND((COALESCE(l.vision_2030_score, 0) * 0.6) + (COALESCE(l.lead_score, 0) * 0.4)) as watan_score,
       COALESCE(SUM(i.amount), 0) as value
     FROM leads l
     LEFT JOIN invoices i ON i.lead_id = l.lead_id AND i.user_id = l.user_id
-    WHERE l.user_id = ? 
+    WHERE l.user_id = ?
     GROUP BY l.lead_id
     ORDER BY l.created_at DESC
   `).all(user.id);
@@ -4341,27 +4343,27 @@ app.delete("/api/leads/:lead_id", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
   const { lead_id } = req.params;
-  
+
   // Check lead exists and belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(lead_id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   // Cascade delete from related tables
   db.prepare("DELETE FROM activity_log WHERE lead_id = ? AND user_id = ?").run(lead_id, user.id);
   db.prepare("DELETE FROM email_queue WHERE lead_id = ? AND user_id = ?").run(lead_id, user.id);
   db.prepare("DELETE FROM bookings WHERE lead_id = ? AND user_id = ?").run(lead_id, user.id);
   db.prepare("DELETE FROM invoices WHERE lead_id = ? AND user_id = ?").run(lead_id, user.id);
   db.prepare("DELETE FROM proposals WHERE lead_id = ? AND user_id = ?").run(lead_id, user.id);
-  
+
   // Delete the lead
   const result = db.prepare("DELETE FROM leads WHERE lead_id = ? AND user_id = ?").run(lead_id, user.id);
-  
+
   if (result.changes === 0) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   res.json({ status: "ok", message: "Lead deleted successfully" });
 });
 
@@ -4371,13 +4373,13 @@ app.put("/api/leads/:lead_id", (req, res) => {
   if (!user) return;
   const { lead_id } = req.params;
   const { name, email, company, title, phone, linkedin, twitter, website } = req.body;
-  
+
   // Check lead exists and belongs to user
   const existingLead = db.prepare("SELECT * FROM leads WHERE lead_id = ? AND user_id = ?").get(lead_id, user.id) as any;
   if (!existingLead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   // Validate email format if provided
   if (email) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -4385,11 +4387,11 @@ app.put("/api/leads/:lead_id", (req, res) => {
       return res.status(400).json({ error: "Invalid email format" });
     }
   }
-  
+
   // Build update fields
   const updates: string[] = [];
   const params: any[] = [];
-  
+
   if (name !== undefined) { updates.push("name = ?"); params.push(name); }
   if (email !== undefined) { updates.push("email = ?"); params.push(email); }
   if (company !== undefined) { updates.push("company = ?"); params.push(company); }
@@ -4398,22 +4400,22 @@ app.put("/api/leads/:lead_id", (req, res) => {
   if (linkedin !== undefined) { updates.push("linkedin = ?"); params.push(linkedin); }
   if (twitter !== undefined) { updates.push("twitter = ?"); params.push(twitter); }
   if (website !== undefined) { updates.push("website = ?"); params.push(website); }
-  
+
   if (updates.length === 0) {
     return res.status(400).json({ error: "No fields to update" });
   }
-  
+
   params.push(lead_id, user.id);
-  
+
   // Update the lead
   db.prepare(`UPDATE leads SET ${updates.join(", ")} WHERE lead_id = ? AND user_id = ?`).run(...params);
-  
+
   // Log the change
   const changes = Object.keys(req.body).filter(k => ['name', 'email', 'company', 'title'].includes(k)).join(', ');
   db.prepare("INSERT INTO activity_log (lead_id, user_id, type, description) VALUES (?, ?, ?, ?)").run(
     lead_id, user.id, "LEAD_UPDATED", `Lead updated: ${changes}`
   );
-  
+
   // Return updated lead
   const updatedLead = db.prepare("SELECT * FROM leads WHERE lead_id = ? AND user_id = ?").get(lead_id, user.id);
   res.json({ status: "ok", lead: updatedLead });
@@ -4452,25 +4454,25 @@ app.post("/api/leads/sync", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
   const { leads } = req.body;
-  
+
   // Batch size limit
   if (!Array.isArray(req.body.leads) || req.body.leads.length > 500) {
     return res.status(400).json({ error: 'Invalid leads array (max 500)' });
   }
-  
+
   // Track duplicates and new leads
   let syncedCount = 0;
   let skippedDuplicates = 0;
-  
+
   const insert = db.prepare(`
     INSERT OR REPLACE INTO leads (lead_id, name, title, company, email, linkedin, industry, lead_score, vision_2030_score, vision_2030_program, vision_2030_alignment, user_id, stage_entered_at, email_verified, email_source, meeting_ready)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT stage_entered_at FROM leads WHERE lead_id = ?), CURRENT_TIMESTAMP), ?, ?, ?)
   `);
-  
+
   const checkDuplicate = db.prepare(`
-    SELECT lead_id FROM leads 
+    SELECT lead_id FROM leads
     WHERE user_id = ? AND (
-      LOWER(company) = LOWER(?) OR 
+      LOWER(company) = LOWER(?) OR
       (LOWER(name) = LOWER(?) AND LOWER(email) = LOWER(?))
     )
   `);
@@ -4483,11 +4485,11 @@ app.post("/api/leads/sync", (req, res) => {
         skippedDuplicates++;
         continue;
       }
-      
+
       const leadId = lead.lead_id || `lead_${randomUUID()}`;
-      
+
       const meetingReady = lead.lead_score != null && lead.lead_score >= 80 ? 1 : 0;
-      
+
       insert.run(
         leadId,
         lead.name,
@@ -4506,7 +4508,7 @@ app.post("/api/leads/sync", (req, res) => {
         lead.email_source || 'ai',
         meetingReady
       );
-      
+
       syncedCount++;
       // Note: past_interactions from AI are NOT stored - only real interactions are logged
     }
@@ -4523,15 +4525,15 @@ app.post("/api/leads/status", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
   const { id, status } = req.body;
-  
+
   // Validate status
   if (!VALID_LEAD_STATUSES.includes(status)) {
     return res.status(400).json({ error: `Invalid status. Must be one of: ${VALID_LEAD_STATUSES.join(', ')}` });
   }
-  
+
   // Update stage_entered_at when status changes
   db.prepare("UPDATE leads SET status = ?, stage_entered_at = CURRENT_TIMESTAMP WHERE lead_id = ? AND user_id = ?").run(status, id, user.id);
-  
+
   db.prepare("INSERT INTO activity_log (lead_id, user_id, type, description) VALUES (?, ?, ?, ?)").run(
     id, user.id, "STATUS_CHANGE", `Status updated to ${status}`
   );
@@ -4542,16 +4544,16 @@ app.post("/api/leads/status", (req, res) => {
 app.post("/api/craft-outreach", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   // Check subscription/trial status
   const outreachUser = db.prepare("SELECT email, subscription_plan, subscription_expires_at, trial_ends_at, is_founder FROM users WHERE id = ?").get(user.id) as any;
   const outreachSubStatus = getSubscriptionStatus(outreachUser);
   if (!outreachSubStatus.isActive) {
     return res.status(403).json({ error: "trial_expired", message: "Your trial has ended. Upgrade to continue using Vision Strategist.", upgrade: true });
   }
-  
+
   const { lead, context } = req.body as { lead: LeadProfile; context: OutreachContext };
-  
+
   // Validate required fields
   if (!lead?.name || !lead?.title || !lead?.company) {
     return res.status(400).json({ error: "Lead name, title, and company are required" });
@@ -4559,12 +4561,12 @@ app.post("/api/craft-outreach", async (req, res) => {
   if (!context?.service) {
     return res.status(400).json({ error: "Context service is required" });
   }
-  
+
   // Get API key (user-specific or system)
   const apiKeyRow = db.prepare("SELECT api_key FROM users WHERE id = ?").get(user.id) as any;
   const apiKey = apiKeyRow?.api_key || process.env.API_KEY;
-  
-  
+
+
   // Get sender info from user profile
   const senderInfo = db.prepare("SELECT company_name, email FROM users WHERE id = ?").get(user.id) as any;
   const enrichedContext: OutreachContext = {
@@ -4572,7 +4574,7 @@ app.post("/api/craft-outreach", async (req, res) => {
     senderCompany: context.senderCompany || senderInfo?.company_name || 'Our Company',
     senderName: context.senderName || senderInfo?.email?.split('@')[0] || outreachUser?.email?.split('@')[0] || 'The Team'
   };
-  
+
   try {
     const result = await craftOutreach(lead, enrichedContext, apiKey);
     res.json(result);
@@ -4602,18 +4604,18 @@ app.post("/api/email/queue", (req, res) => {
   }
   const { lead_id, to_email, subject, body, with_followups, scheduled_at } = req.body;
   if (!to_email || !subject || !body) return res.status(400).json({ error: "to_email, subject, body required" });
-  
+
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(to_email)) {
     return res.status(400).json({ error: "Invalid email format" });
   }
-  
+
   // Validate subject length (max 200 chars)
   if (subject.length > 200) {
     return res.status(400).json({ error: "Subject must be under 200 characters" });
   }
-  
+
   // Validate body size (max 50KB)
   if (body.length > 50 * 1024) {
     return res.status(400).json({ error: "Body must be under 50KB" });
@@ -4655,17 +4657,17 @@ app.post("/api/email/queue", (req, res) => {
 // Email: Unsubscribe endpoint (GET for email client compatibility)
 app.get("/api/unsubscribe", (req, res) => {
   const { email, token } = req.query;
-  
+
   if (!email || !token) {
     return res.status(400).json({ error: "Email and token are required" });
   }
-  
+
   // Verify HMAC-based unsubscribe token
   const expectedToken = createHmac('sha256', process.env.LEADJIN_ADMIN_SECRET || 'leadjin-unsubscribe-fallback').update(email as string).digest('hex').slice(0, 16);
   if (token !== expectedToken) {
     return res.status(400).json({ error: "Invalid unsubscribe link" });
   }
-  
+
   // Mark all pending emails for this address as cancelled and set do_not_contact
   try {
     db.prepare("UPDATE email_queue SET status = 'CANCELLED' WHERE to_email = ? AND status = 'PENDING'").run(email);
@@ -4688,34 +4690,34 @@ app.post("/api/quotations/create", (req, res) => {
   if (!lead_id || !items || !Array.isArray(items)) {
     return res.status(400).json({ error: "lead_id and items array are required" });
   }
-  
+
   // Validate amounts are positive
   for (const item of items) {
     if (item.amount && (Number(item.amount) < 0)) {
       return res.status(400).json({ error: "Amount cannot be negative" });
     }
   }
-  
+
   // Calculate totals with VAT
   const subtotal = items.reduce((sum: number, i: any) => sum + (Number(i.amount) || 0), 0);
   const vatRate = vat_rate || 0.15; // Default 15% Saudi VAT
   const vatAmount = Math.round(subtotal * vatRate);
   const total = subtotal + vatAmount;
   const cur = currency || 'SAR';
-  
+
   const invoiceId = db.prepare(
-    `INSERT INTO invoices (lead_id, amount, currency, vat_rate, vat_amount, subtotal, company_vat_number, status, payment_link, user_id) 
+    `INSERT INTO invoices (lead_id, amount, currency, vat_rate, vat_amount, subtotal, company_vat_number, status, payment_link, user_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
-    lead_id, 
-    total * 100, 
+    lead_id,
+    total * 100,
     cur,
     vatRate,
     vatAmount * 100,
     subtotal * 100,
     company_vat_number || '',
-    'DRAFT', 
-    JSON.stringify({ items, notes, valid_days: valid_days || 30, currency: cur, vat_rate: vatRate }), 
+    'DRAFT',
+    JSON.stringify({ items, notes, valid_days: valid_days || 30, currency: cur, vat_rate: vatRate }),
     user.id
   ).lastInsertRowid;
 
@@ -4730,10 +4732,10 @@ app.post("/api/quotations/create", (req, res) => {
         `Dear ${lead.name},\n\nPlease find your quotation below:\n\n${itemList}\n\nSubtotal: ${cur} ${subtotal.toLocaleString()}\nVAT (${(vatRate*100).toFixed(0)}%): ${cur} ${vatAmount.toLocaleString()}\nTotal: ${cur} ${total.toLocaleString()}\n\nValid for ${valid_days || 30} days.\n\nReply to discuss further.`
       );
   }
-  
-  res.json({ 
-    status: "created", 
-    invoice_id: invoiceId, 
+
+  res.json({
+    status: "created",
+    invoice_id: invoiceId,
     subtotal,
     vat_amount: vatAmount,
     total,
@@ -4757,20 +4759,20 @@ app.patch("/api/quotations/:id/status", (req, res) => {
   if (!['DRAFT', 'ACCEPTED', 'PAID', 'CANCELLED'].includes(status)) {
     return res.status(400).json({ error: "invalid status" });
   }
-  
+
   // Get current invoice data before updating
   const invoice = db.prepare("SELECT * FROM invoices WHERE id = ? AND user_id = ?").get(req.params.id, user.id) as any;
   if (!invoice) return res.status(404).json({ error: "not found" });
-  
+
   const result = db.prepare("UPDATE invoices SET status = ? WHERE id = ? AND user_id = ?").run(status, req.params.id, user.id);
   if (result.changes === 0) return res.status(404).json({ error: "not found" });
-  
+
   // Send email notifications on status change
   const lead = db.prepare("SELECT * FROM leads WHERE lead_id = ? AND user_id = ?").get(invoice.lead_id, user.id) as any;
   const userCompany = db.prepare("SELECT company_name FROM users WHERE id = ?").get(user.id) as any;
   const currency = invoice.currency || 'SAR';
   const amount = (invoice.amount / 100).toLocaleString();
-  
+
   if (lead?.email) {
     if (status === 'ACCEPTED') {
       db.prepare("INSERT INTO email_queue (lead_id, user_id, to_email, subject, body) VALUES (?,?,?,?,?)")
@@ -4786,7 +4788,7 @@ app.patch("/api/quotations/:id/status", (req, res) => {
         );
     }
   }
-  
+
   res.json({ status: "updated" });
 });
 
@@ -4794,19 +4796,19 @@ app.patch("/api/quotations/:id/status", (req, res) => {
 app.delete("/api/quotations/:id", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   // Get the invoice to check status
   const invoice = db.prepare("SELECT * FROM invoices WHERE id = ? AND user_id = ?").get(req.params.id, user.id) as any;
   if (!invoice) return res.status(404).json({ error: "not found" });
-  
+
   // Only allow deletion of DRAFT quotations
   if (invoice.status !== 'DRAFT') {
     return res.status(400).json({ error: "Only DRAFT quotations can be deleted" });
   }
-  
+
   const result = db.prepare("DELETE FROM invoices WHERE id = ? AND user_id = ?").run(req.params.id, user.id);
   if (result.changes === 0) return res.status(404).json({ error: "not found" });
-  
+
   res.json({ status: "deleted" });
 });
 
@@ -4877,20 +4879,20 @@ app.get("/api/utils/islamic-calendar", (req, res) => {
   const today = new Date();
   const currentYear = today.getFullYear();
   const { ramadanStart, ramadanEnd, eidStart, eidEnd } = getRamadanDatesForYear(currentYear);
-  
+
   const isRamadan = today >= ramadanStart && today <= ramadanEnd;
   const isEid = today >= eidStart && today <= eidEnd;
-  
+
   // Calculate approximate Hijri date
   const hijriDate = getApproximateHijriDate(today);
-  
+
   let nextHoliday = null;
   if (today < ramadanStart) {
     nextHoliday = { name: 'Ramadan', date: ramadanStart.toISOString().split('T')[0] };
   } else if (today < eidStart && today > ramadanEnd) {
     nextHoliday = { name: 'Eid al-Fitr', date: eidStart.toISOString().split('T')[0] };
   }
-  
+
   res.json({
     isRamadan,
     isEid,
@@ -4910,24 +4912,24 @@ app.get("/api/utils/islamic-calendar", (req, res) => {
 app.post("/api/test/seed", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   // Check if leads already exist — avoid duplicate seeding
   const existingLeads = db.prepare(
     "SELECT COUNT(*) as cnt FROM leads WHERE user_id = ?"
   ).get(user.id) as { cnt: number };
-  
+
   if (existingLeads.cnt > 0) {
     return res.json({ status: "already_seeded", message: "Leads already exist, no re-seed." });
   }
-  
+
   // In production, only founders can seed
   const FOUNDER_EMAIL = process.env.FOUNDER_EMAIL || '';
   const isFounder = user.email?.toLowerCase() === FOUNDER_EMAIL.toLowerCase();
-  
+
   if (process.env.NODE_ENV === 'production' && !isFounder) {
     return res.status(403).json({ error: "Only founder can seed in production" });
   }
-  
+
   try {
     // Clear existing test data (optional, but good for a clean case study)
     db.prepare("DELETE FROM leads WHERE user_id = ?").run(user.id);
@@ -4984,7 +4986,7 @@ function checkPrayerTimeConflict(startTime: Date): { hasConflict: boolean; praye
   const hours = startTime.getHours();
   const minutes = startTime.getMinutes();
   const timeDecimal = hours + minutes / 60;
-  
+
   // Riyadh prayer times (approximate, ±30min window)
   const prayers = [
     { name: 'Fajr', start: 5.0, end: 5.5, suggest: '06:00' },
@@ -4993,7 +4995,7 @@ function checkPrayerTimeConflict(startTime: Date): { hasConflict: boolean; praye
     { name: 'Maghrib', start: 18.0, end: 18.5, suggest: '19:00' },
     { name: 'Isha', start: 19.5, end: 20.0, suggest: '20:30' }
   ];
-  
+
   for (const prayer of prayers) {
     if (timeDecimal >= prayer.start && timeDecimal <= prayer.end) {
       return { hasConflict: true, prayer: prayer.name, suggestedTime: prayer.suggest };
@@ -5013,23 +5015,23 @@ app.post("/api/calendar/book", async (req: express.Request, res: express.Respons
   if (!start_time || !end_time) {
     return res.status(400).json({ error: "start_time and end_time are required" });
   }
-  
+
   const startDate = new Date(start_time);
   const endDate = new Date(end_time);
-  
+
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
     return res.status(400).json({ error: "Invalid date format" });
   }
-  
+
   if (endDate <= startDate) {
     return res.status(400).json({ error: "End time must be after start time" });
   }
-  
+
   // N5: Check prayer time conflict
   const prayerCheck = checkPrayerTimeConflict(startDate);
   if (prayerCheck.hasConflict) {
-    return res.status(400).json({ 
-      error: "prayer_time_conflict", 
+    return res.status(400).json({
+      error: "prayer_time_conflict",
       prayer: prayerCheck.prayer,
       suggested_time: prayerCheck.suggestedTime,
       message: `Meeting time overlaps with ${prayerCheck.prayer} prayer. Suggested: ${prayerCheck.suggestedTime}`
@@ -5047,19 +5049,19 @@ app.post("/api/calendar/book", async (req: express.Request, res: express.Respons
     const leadName = lead?.name || 'Contact';
     const userEmail = user.email;
     const formattedDate = startDate.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-    
+
     // Email to lead
     db.prepare("INSERT INTO email_queue (lead_id, user_id, to_email, subject, body) VALUES (?, ?, ?, ?, ?)").run(
       lead_id, user.id, email, `Meeting Confirmed: ${summary || 'Strategic Partnership'}`,
       `Dear ${leadName},\n\nYour meeting is confirmed for ${formattedDate}.\n\n${summary || 'Looking forward to discussing how we can help your business grow.'}\n\nBest regards`
     );
-    
+
     // Email to self (user)
     db.prepare("INSERT INTO email_queue (lead_id, user_id, to_email, subject, body) VALUES (?, ?, ?, ?, ?)").run(
       lead_id, user.id, userEmail, `Meeting booked with ${leadName}`,
       `You have a meeting scheduled with ${leadName} on ${formattedDate}.\n\n${summary || ''}\n\nLead ID: ${lead_id}`
     );
-    
+
     res.json({ status: "ok", message: "Booking confirmed and confirmation emails queued." });
   } catch (error: any) {
     res.status(500).json({ error: "internal server error" });
@@ -5158,7 +5160,7 @@ app.get("/api/utils/hijri", (req, res) => {
       return res.status(400).json({ error: "Invalid date format" });
     }
     const hijri = gregorianToHijri(gregDate);
-    res.json({ 
+    res.json({
       hijri: `${hijri.year}/${hijri.month}/${hijri.day}`,
       formatted: hijri.formatted,
       gregorian: gregDate.toISOString()
@@ -5224,17 +5226,17 @@ app.delete("/api/services/:id", (req, res) => {
 app.post("/api/quotations/suggest-price", async (req, res) => {
   const user = requireAuth(req, res);
   if (!user) return;
-  
+
   const { service_name, lead_industry, lead_company_size, lead_country, user_services_desc } = req.body;
   if (!service_name) return res.status(400).json({ error: "service_name is required" });
-  
+
   // Check cache
   const cacheKey = `${service_name}:${lead_industry}:${lead_country}`;
   const cached = priceSuggestionCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < PRICE_CACHE_TTL) {
     return res.json({ ...cached.result, cached: true });
   }
-  
+
 
   try {
     const ai = getGenAI();
@@ -5256,7 +5258,7 @@ Return ONLY a JSON object in this exact format:
       contents: prompt,
       config: { responseMimeType: "application/json" }
     });
-    
+
     let result;
     try {
       const text = response.text || '{}';
@@ -5271,10 +5273,10 @@ Return ONLY a JSON object in this exact format:
     } catch (e: unknown) {
       result = { min_sar: 5000, max_sar: 15000, rationale: "Standard GCC market rate", confidence: "medium" };
     }
-    
+
     // Cache result
     priceSuggestionCache.set(cacheKey, { result, timestamp: Date.now() });
-    
+
     res.json({ ...result, cached: false });
   } catch (error: any) {
     console.error("[AI Price Suggestion] Error:", error.message);
@@ -5289,16 +5291,16 @@ Return ONLY a JSON object in this exact format:
 app.get("/api/analytics/stats", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { from, to } = req.query;
   let dateFilter = '';
   let dateParams: any[] = [user.id];
-  
+
   if (from && to) {
     dateFilter = ' AND created_at >= ? AND created_at <= ?';
     dateParams = [user.id, from, to];
   }
-  
+
   const uid = user.id;
   const totalLeads = db.prepare(`SELECT COUNT(*) as count FROM leads WHERE user_id = ?${dateFilter}`).get(...dateParams) as any;
   const contactedLeads = db.prepare(`SELECT COUNT(*) as count FROM leads WHERE user_id = ? AND status != 'NEW'${dateFilter}`).get(...dateParams) as any;
@@ -5343,23 +5345,23 @@ app.get("/api/analytics/stats", (req, res) => {
 app.post("/api/unsubscribe", (req, res) => {
   const { email, token } = req.body;
   if (!email || !token) return res.status(400).json({ error: "email and token required" });
-  
+
   // Verify HMAC-based unsubscribe token
   const expectedToken = createHmac('sha256', process.env.LEADJIN_ADMIN_SECRET || 'leadjin-unsubscribe-fallback').update(email).digest('hex').slice(0, 16);
   if (token !== expectedToken) {
     return res.status(400).json({ error: "Invalid unsubscribe token" });
   }
-  
+
   // Mark lead as do_not_contact (add column if not exists)
   try {
     db.exec("ALTER TABLE leads ADD COLUMN do_not_contact INTEGER DEFAULT 0");
   } catch (e: unknown) {}
-  
+
   const lead = db.prepare("SELECT * FROM leads WHERE email = ?").get(email) as any;
   if (lead) {
     db.prepare("UPDATE leads SET do_not_contact = 1 WHERE email = ?").run(email);
   }
-  
+
   // Also cancel any pending emails to this address
   db.prepare("UPDATE email_queue SET status = 'CANCELLED' WHERE to_email = ? AND status = 'PENDING'").run(email);
 
@@ -5387,7 +5389,7 @@ app.get("/api/email/track/:id/open", (req, res) => {
     // Silently fail - don't expose errors to tracking pixel
     console.error(`[EmailTrack] Error recording open:`, (e as Error).message);
   }
-  
+
   // Return 1x1 transparent PNG
   res.set('Content-Type', 'image/png');
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -5398,11 +5400,11 @@ app.get("/api/email/track/:id/open", (req, res) => {
 app.get("/api/email/track/:id/click", (req, res) => {
   const { id } = req.params;
   const url = req.query.url as string;
-  
+
   if (!url) {
     return res.status(400).send('Missing url');
   }
-  
+
   // Block non-HTTP protocols and validate URL format
   try {
     const parsed = new URL(url);
@@ -5412,7 +5414,7 @@ app.get("/api/email/track/:id/click", (req, res) => {
   } catch {
     return res.status(400).send('Invalid URL');
   }
-  
+
   try {
     // Record the click event
     db.prepare("INSERT INTO email_events (email_queue_id, event_type, metadata) VALUES (?, 'click', ?)").run(
@@ -5422,7 +5424,7 @@ app.get("/api/email/track/:id/click", (req, res) => {
   } catch (e: any) {
     console.error(`[EmailTrack] Error recording click:`, (e as Error).message);
   }
-  
+
   // Redirect to the original URL
   res.redirect(url);
 });
@@ -5431,51 +5433,51 @@ app.get("/api/email/track/:id/click", (req, res) => {
 app.get("/api/analytics/email-engagement", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { from, to } = req.query;
   let dateFilter = '';
   const params: any[] = [user.id];
-  
+
   if (from && to) {
     dateFilter = ' AND eq.created_at >= ? AND eq.created_at <= ?';
     params.push(from, to);
   }
-  
+
   // Get email stats
   const emailStats = db.prepare(`
-    SELECT 
+    SELECT
       COUNT(*) as total_sent,
       SUM(CASE WHEN eq.status = 'SENT' THEN 1 ELSE 0 END) as sent,
       SUM(CASE WHEN eq.status = 'FAILED' THEN 1 ELSE 0 END) as failed
     FROM email_queue eq
     WHERE eq.user_id = ? ${dateFilter}
   `).get(...params) as any;
-  
+
   // Get open stats
   const openStats = db.prepare(`
-    SELECT 
+    SELECT
       COUNT(DISTINCT ee.email_queue_id) as unique_opens,
       COUNT(*) as total_opens
     FROM email_events ee
     JOIN email_queue eq ON eq.id = ee.email_queue_id
     WHERE eq.user_id = ? AND ee.event_type = 'open' ${dateFilter}
   `).get(...params) as any;
-  
+
   // Get click stats
   const clickStats = db.prepare(`
-    SELECT 
+    SELECT
       COUNT(DISTINCT ee.email_queue_id) as unique_clicks,
       COUNT(*) as total_clicks
     FROM email_events ee
     JOIN email_queue eq ON eq.id = ee.email_queue_id
     WHERE eq.user_id = ? AND ee.event_type = 'click' ${dateFilter}
   `).get(...params) as any;
-  
+
   // Calculate rates
   const totalSent = emailStats.sent || 0;
   const openRate = totalSent > 0 ? Math.round((openStats.unique_opens / totalSent) * 100) : 0;
   const clickRate = totalSent > 0 ? Math.round((clickStats.unique_clicks / totalSent) * 100) : 0;
-  
+
   res.json({
     total_sent: totalSent,
     unique_opens: openStats.unique_opens || 0,
@@ -6049,7 +6051,7 @@ app.post("/api/signals/:id/dismiss", (req, res) => {
 app.get("/api/leads/pipeline", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   try {
     const pipeline = getLeadPipeline(user.id);
     const metrics = getPipelineMetrics(user.id);
@@ -6064,15 +6066,15 @@ app.get("/api/leads/pipeline", (req, res) => {
 app.get("/api/leads/:id/score", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { id } = req.params;
-  
+
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   try {
     const score = getLeadScore(id);
     res.json({ lead_id: id, score });
@@ -6086,16 +6088,16 @@ app.get("/api/leads/:id/score", (req, res) => {
 app.put("/api/leads/:id/intelligence", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { id } = req.params;
   const intelligenceData: UpdateIntelligenceInput = req.body;
-  
+
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   try {
     const updatedLead = await updateLeadIntelligence(id, intelligenceData);
     res.json({ status: "ok", lead: updatedLead });
@@ -6109,16 +6111,16 @@ app.put("/api/leads/:id/intelligence", async (req, res) => {
 app.post("/api/leads/:id/hunt-process", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { id } = req.params;
   const { huntResult, options } = req.body;
-  
+
   // Verify lead belongs to user
   const lead = db.prepare("SELECT * FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   try {
     const processed = await processHuntResult(id, huntResult, options);
     res.json({ status: "ok", lead: processed });
@@ -6132,16 +6134,16 @@ app.post("/api/leads/:id/hunt-process", async (req, res) => {
 app.post("/api/leads/:id/outreach-sent", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { id } = req.params;
   const { craftedOutreach } = req.body;
-  
+
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   try {
     await processOutreachSent(id, craftedOutreach, user.id);
     res.json({ status: "ok", message: "Outreach tracked" });
@@ -6155,16 +6157,16 @@ app.post("/api/leads/:id/outreach-sent", async (req, res) => {
 app.post("/api/leads/:id/reply-received", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { id } = req.params;
   const { classification, replyBody } = req.body;
-  
+
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   try {
     await processReplyReceived(id, classification, replyBody);
     res.json({ status: "ok", message: "Reply processed", classification: classification.category });
@@ -6178,16 +6180,16 @@ app.post("/api/leads/:id/reply-received", async (req, res) => {
 app.post("/api/leads/:id/vision-alignment", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { id } = req.params;
   const { score, primaryProgram, secondaryPrograms, reasoning } = req.body;
-  
+
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   try {
     await updateVisionAlignment(id, { score, primaryProgram, secondaryPrograms, reasoning });
     res.json({ status: "ok", message: "Vision alignment updated" });
@@ -6201,7 +6203,7 @@ app.post("/api/leads/:id/vision-alignment", async (req, res) => {
 app.get("/api/intelligence/metrics", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   try {
     const metrics = getPipelineMetrics(user.id);
     res.json(metrics);
@@ -6219,25 +6221,25 @@ app.get("/api/intelligence/metrics", (req, res) => {
 app.post("/api/lead-score/:id", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { id } = req.params;
-  
+
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   try {
     // Get API key (user-specific or system)
     const apiKeyRow = db.prepare("SELECT api_key FROM users WHERE id = ?").get(user.id) as any;
     const apiKey = apiKeyRow?.api_key || process.env.API_KEY;
-    
+
     // Get base score and engagement metrics
     const score = getLeadScore(id);
     const engagement = calculateEngagementMetrics(id);
     const history = getRelationshipHistory(id);
-    
+
     // AI-enhanced insights via genaiClient (LOCAL mode by default — Ollama).
     // No cloud API key required; getGenAI() dispatches LEADJIN_PROVIDER.
     let aiInsights = null;
@@ -6259,7 +6261,7 @@ Provide brief analysis in JSON: { "hotLead": boolean, "keyInsight": string, "pri
           contents: prompt,
           config: { responseMimeType: 'application/json' }
         });
-        
+
         const text = aiResponse.text || '';
         const cleaned = text.replace(/\`\`\`json\n?|\n?\`\`\`/g, '').trim();
         aiInsights = JSON.parse(cleaned);
@@ -6267,10 +6269,10 @@ Provide brief analysis in JSON: { "hotLead": boolean, "keyInsight": string, "pri
         console.log('[LeadScore] AI enhancement skipped:', aiError.message);
       }
     }
-    
-    res.json({ 
-      lead_id: id, 
-      score, 
+
+    res.json({
+      lead_id: id,
+      score,
       engagement,
       history: {
         interaction_count: history.interaction_count,
@@ -6289,11 +6291,11 @@ Provide brief analysis in JSON: { "hotLead": boolean, "keyInsight": string, "pri
 app.post("/api/pipeline-view", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   try {
     const pipeline = getPipelineView(user.id);
     const metrics = getPipelineMetrics(user.id);
-    
+
     // Enhance pipeline with relationship data
     const enhancedPipeline = pipeline.map(group => ({
       ...group,
@@ -6307,9 +6309,9 @@ app.post("/api/pipeline-view", (req, res) => {
         };
       }),
     }));
-    
-    res.json({ 
-      pipeline: enhancedPipeline, 
+
+    res.json({
+      pipeline: enhancedPipeline,
       metrics,
       generated_at: new Date().toISOString(),
     });
@@ -6323,29 +6325,29 @@ app.post("/api/pipeline-view", (req, res) => {
 app.post("/api/next-action/:id", async (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { id } = req.params;
-  
+
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   try {
     // Get API key (user-specific or system)
     const apiKeyRow = db.prepare("SELECT api_key FROM users WHERE id = ?").get(user.id) as any;
     const apiKey = apiKeyRow?.api_key || process.env.API_KEY;
-    
+
     // Get next action recommendation
     const recommendation = await getNextAction(id, apiKey);
-    
+
     // Get supporting data
     const score = getLeadScore(id);
     const engagement = calculateEngagementMetrics(id);
     const history = getRelationshipHistory(id);
-    
-    res.json({ 
+
+    res.json({
       lead_id: id,
       recommendation,
       context: {
@@ -6366,24 +6368,24 @@ app.post("/api/next-action/:id", async (req, res) => {
 app.post("/api/relationship/:id/track", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { id } = req.params;
   const { events } = req.body;
-  
+
   if (!Array.isArray(events)) {
     return res.status(400).json({ error: "events array is required" });
   }
-  
+
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   try {
     const history = trackRelationship(id, events);
-    res.json({ 
-      status: "ok", 
+    res.json({
+      status: "ok",
       history,
       tracked_at: new Date().toISOString(),
     });
@@ -6397,20 +6399,20 @@ app.post("/api/relationship/:id/track", (req, res) => {
 app.get("/api/relationship/:id/history", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  
+
   const { id } = req.params;
-  
+
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
     return res.status(404).json({ error: "Lead not found" });
   }
-  
+
   try {
     const history = getRelationshipHistory(id);
     const engagement = calculateEngagementMetrics(id);
-    
-    res.json({ 
+
+    res.json({
       lead_id: id,
       history,
       engagement,
@@ -6494,8 +6496,8 @@ app.post("/api/classify-reply", async (req, res) => {
     res.json(result);
   } catch (error: any) {
     console.error('[ProtocolManager] Classification error:', error.message);
-    res.status(500).json({ 
-      error: "Failed to classify reply", 
+    res.status(500).json({
+      error: "Failed to classify reply",
       // F-27: error detail intentionally omitted from response
       category: 'NOT_INTERESTED',
       confidence: 0,
@@ -7216,7 +7218,7 @@ async function startServer() {
   const isDev = process.env.NODE_ENV !== 'production';
   console.log(`Starting server in ${isDev ? 'development' : 'production'} mode.`);
   console.log(`[PATH] Project root: ${PROJECT_ROOT}`);
-  
+
   if (isDev) {
     const vite = await createViteServer({
       root: PROJECT_ROOT,
@@ -7224,39 +7226,39 @@ async function startServer() {
       appType: "custom",
     });
     app.use(vite.middlewares);
-    
+
     // Explicit SPA fallback for dev - serve index.html for page routes
     // This MUST be a GET handler, not app.use, to avoid interfering with Vite's middleware
     app.get("*", async (req, res, next) => {
       // Skip API routes
       if (req.url.startsWith("/api")) return next();
-      
+
       // Skip Vite internal paths - these should be handled by Vite middleware
-      if (req.url.startsWith("/@") || 
+      if (req.url.startsWith("/@") ||
           req.url.startsWith("/node_modules/") ||
           req.url.startsWith("/src/")) {
         return next();
       }
-      
+
       // Skip static file requests (have file extensions but aren't .html)
       // Vite should handle these
       if (/\.[^/]+$/.test(req.url) && !req.url.endsWith('.html')) {
         return next();
       }
-      
+
       // Only serve HTML for page navigation requests
       // Check Accept header - browsers sending */* or text/html should get HTML
       const accept = req.headers.accept || "";
-      
+
       // If the request explicitly wants something other than HTML, skip
-      if (accept && 
-          !accept.includes("text/html") && 
+      if (accept &&
+          !accept.includes("text/html") &&
           !accept.includes("*/*") &&
           !accept.includes("application/xhtml+xml")) {
         // Might be an API or asset request - let it 404 naturally
         return next();
       }
-      
+
       try {
         const fs = await import("fs");
         const indexPath = path.resolve(PROJECT_ROOT, "index.html");

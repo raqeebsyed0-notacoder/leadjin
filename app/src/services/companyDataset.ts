@@ -196,7 +196,10 @@ function _loadDataset(dir: string): LoadedDataset {
 
       records.push({
         cr,
-        name: jin?.name || raw['facts']?.['name'] || cr,
+        name:
+          jin?.name ||
+          ((raw['facts'] as Record<string, unknown> | undefined)?.['name'] as string | undefined) ||
+          cr,
         sector: jin?.sector || '',
         city: jin?.city || '',
         licence,
