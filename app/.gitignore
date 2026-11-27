@@ -20,3 +20,17 @@ coverage/
 # Backup / source-snapshot files (never committed)
 *.bak
 *.bak-*
+
+# Working artifacts and source snapshots (never committed)
+workers/*/node_modules/
+backups-*/
+_archive/
+.leadjin/
+*.pre-move-*
+*.pre-fix-*
+.audit_perf_idx.txt
+tmp-check-*
+
+# Python caches
+__pycache__/
+*.pyc

@@ -20,6 +20,7 @@ import cors from "cors";
 import dns from 'dns/promises';
 import net from 'net';
 import { generateLeadjinLeads } from "./src/services/leadService.js";
+import { runLeadDiscovery } from "./src/services/leadDiscoveryPipeline.js";
 import type { LeadjinLead } from "./src/services/geminiService.ts";
 import { getGenAI, resolveModel, LEADJIN_PROVIDER } from "./src/services/genaiClient.js";
 import { waterfallEnrichment } from './src/services/waterfallEnrichment.js';
@@ -31,6 +32,7 @@ import { intentSignalService } from './src/services/intentSignals.js';
 import { createCompleteJinRouter } from './src/services/jinCompleteRoutes.js';
 import { createJinHuntStreamRouter } from './src/services/jinHuntStream.js';
 import { createArtisanRouter } from './src/services/artisanRoutes.js';
+import { assertSendable, ensureSuppressionSchema, suppress } from './src/services/suppressionGate.js';
 import { huntExecutives } from './src/services/linkedinHunter.js';
 import { fetchWathqLead } from './src/services/wathqService.js';
 import { huntOrchestrate, type OrchestrateInput } from './src/services/huntOrchestrator.js';
@@ -39,6 +41,7 @@ import { seedCaseStudyLeads } from './src/services/firstBootSeed.js';
 import { tripleVerify } from './src/services/sovereignVerifier.js';
 import { createModelSettingsRouter } from './src/services/modelSettingsRoutes.js';
 import { createModelCatalogRouter } from './src/services/modelCatalogRoutes.js';
+import { createDatasetRouter } from './src/services/datasetRoutes.js';
 import { craftOutreach, type LeadProfile, type OutreachContext } from './src/services/visionStrategist.js';
 import { ProtocolManager, type ClassifyOptions } from './src/services/protocolManager.js';
 import { verifyEmailSMTP, verifyPhoneHLR, verifyRegionalHQ } from './src/services/jinHandsVerifier.js';
@@ -972,6 +975,9 @@ db.exec(`
   );
 `);
 
+// Email safety: hard email-keyed suppression table (blocks addresses with no lead row).
+ensureSuppressionSchema(db);
+
 // Initialize the Intelligence Hub only after the core tables exist. When this
 // ran before CREATE TABLE leads, every column migration logged "no such table:
 // leads" on a fresh DB and the artisan outreach/reply/CRM routes returned 500
@@ -1709,6 +1715,9 @@ app.use('/api/settings', createModelSettingsRouter(db, getUserFromTokenCached));
 // --- LeadJin live provider catalogue (live models catalogue, settings surface) ---
 app.use('/api/settings', createModelCatalogRouter());
 
+// --- LeadJin company-dataset retrieval router (CC0-only, auth-gated) ---
+app.use('/api/dataset', createDatasetRouter({ getUserFromToken: getUserFromTokenCached }));
+
 // Shared admin guard helper - requires BOTH admin secret AND valid user session with is_admin flag
 const requireAdmin = (req: express.Request, res: express.Response): boolean => {
   const adminSecret = process.env.LEADJIN_ADMIN_SECRET;
@@ -2299,7 +2308,7 @@ function generateEmailFromPattern(name: string, domain: string, pattern: string)
   return `${first}.${last}@${domain}`;
 }
 
-function getCachedLeadsForHarvest(db: any, params: any): any[] {
+export function getCachedLeadsForHarvest(db: any, params: any): any[] {
   const industry = params.targetIndustry;
   const limit = params.limit || 10;
   const fetchLimit = Math.max(limit * 3, 50); // over-fetch so we can deduplicate across tiers
@@ -2543,65 +2552,46 @@ app.post("/api/leads/harvest", async (req, res) => {
   }
   
   try {
-    // Layer 0: Check pre-crawl cache first
-    const cachedLeads = getCachedLeadsForHarvest(db, searchParams);
-    const requestedLimit = searchParams.limit || 10;
-
-    if (cachedLeads.length >= requestedLimit) {
-      // Enough cached data — skip Gemini entirely
-      console.log(`[Harvest] Serving ${cachedLeads.length} leads from pre-crawl cache (skipping Gemini)`);
-      db.prepare("UPDATE users SET monthly_searches_used = monthly_searches_used + 1 WHERE id = ?").run(user.id);
-      return res.json({ leads: cachedLeads, usingPersonalKey, source: 'cache' });
-    }
-
-    // Not enough cached — call for the remainder, then merge
-    const leadLimit = requestedLimit - cachedLeads.length;
-    console.log(`[Harvest] ${cachedLeads.length} cached leads found; calling for ${leadLimit} more`);
-
-    // Map searchParams to the expected generateLeadjinLeads parameters
-    const leadResults: LeadjinLead[] = await generateLeadjinLeads({
-      userIndustry: searchParams.targetIndustry || 'Technology',
-      userServices: searchParams.userServices || '',
-      userCaseStudy: searchParams.userCaseStudy || '',
-      userCompetitors: searchParams.userCompetitors || '',
-      targetIndustry: searchParams.targetIndustry || 'Technology',
-      targetServices: searchParams.userServices ? [searchParams.userServices] : [],
-      company_size: searchParams.company_size || '10-200',
-      geography: searchParams.geography || ['Saudi Arabia'],
-      job_titles: searchParams.job_titles || ['CEO', 'CTO', 'Director'],
-      limit: leadLimit,
-      model: searchParams.model || 'flash',
+    // Layer 0 - single shared discovery pipeline: cache -> Places -> Wathq ->
+    // model-driven discovery -> assemble. Every stage is skipped cleanly when
+    // its credential is absent; the model stage is mandatory and always runs.
+    const run = await runLeadDiscovery({
+      targetIndustry: searchParams.targetIndustry,
+      userServices: searchParams.userServices || "",
+      userCaseStudy: searchParams.userCaseStudy || "",
+      userCompetitors: searchParams.userCompetitors || "",
+      geography: searchParams.geography || ["Saudi Arabia"],
+      job_titles: searchParams.job_titles || ["CEO", "CTO", "Director"],
+      company_size: searchParams.company_size || "10-200",
+      limit: searchParams.limit || 10,
+      userApiKey: apiKey,
       majlisMode: searchParams.majlisMode ?? false,
       vision2030: searchParams.vision2030 ?? false,
-      userApiKey: apiKey
+      sector: searchParams.targetIndustry,
+      geo: searchParams.geography ? (Array.isArray(searchParams.geography) ? searchParams.geography[0] : searchParams.geography) : "Riyadh",
+      crs: [],
+      engine: searchParams.engine || "ollama",
     });
 
-    // DNS-validate leads — reject fake domains
-    const dns = await import('dns/promises');
-    const validatedLeads: any[] = [];
-    for (const lead of leadResults) {
-      if (lead.website) {
-        const domain = lead.website.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
-        try {
-          const mx = await dns.resolveMx(domain);
-          if (mx && mx.length > 0) {
-            validatedLeads.push({ ...lead, verified: false });
-          } else {
-            console.log(`[Harvest] Rejected ${lead.company} — no MX for ${domain}`);
-          }
-        } catch {
-          console.log(`[Harvest] Rejected ${lead.company} — DNS failed for ${domain}`);
-        }
-      } else {
-        // No website — still include but mark as low confidence
-        validatedLeads.push({ ...lead, verified: false, confidence: 'low' });
-      }
+    const leads = run.leads;
+    const cacheLeads = leads.filter((l: any) => l.source_engine === "cache").length;
+    // Keep `source` backward compatible for App.tsx:1678 (cache -> mixed, else ai)
+    const source = cacheLeads > 0 ? "mixed" : "ai";
+    const engines_used = run.engines_used;
+
+    // Job tracking for the UI monitor/retrieval endpoint (in-memory, bounded to 50 jobs)
+    const jobId = randomUUID();
+    harvestJobs.set(jobId, {
+      status: "completed",
+      produced: leads.length,
+      engines_used,
+      errors: run.errors,
+      leads_count: leads.length,
+    });
+    while (harvestJobs.size > 50) {
+      const oldest = harvestJobs.keys().next().value;
+      harvestJobs.delete(oldest);
     }
-
-    const leads = [...cachedLeads, ...validatedLeads];
-    const source = cachedLeads.length > 0 ? 'mixed' : 'ai';
-
-    db.prepare("UPDATE users SET monthly_searches_used = monthly_searches_used + 1 WHERE id = ?").run(user.id);
 
     // Persist leads to database for background verification and CRM
     const insertLead = db.prepare(`INSERT OR IGNORE INTO leads
@@ -2613,17 +2603,17 @@ app.post("/api/leads/harvest", async (req, res) => {
       for (const lead of leads) {
         insertLead.run(
           lead.lead_id, user.id, lead.name, lead.title, lead.company,
-          lead.industry || '', lead.email || '', lead.phone || '',
-          lead.linkedin || '', lead.twitter || '', lead.website || '',
-          lead.lead_score || 0, lead.email_source || (lead.email ? 'precrawl' : ''), now
+          lead.industry || "", lead.email || "", lead.phone || "",
+          lead.linkedin || "", lead.twitter || "", lead.website || "",
+          lead.lead_score || 0, lead.email_source || (lead.email ? "precrawl" : ""), now
         );
       }
     });
 
     try { insertLeads(); } catch (e: any) { console.warn('[Harvest] Lead persistence failed:', (e as Error).message); }
 
-    // Return leads immediately — email enrichment happens separately via /api/leads/enrich
-    res.json({ leads, usingPersonalKey, source });
+    // Return leads immediately - email enrichment happens separately via /api/leads/enrich
+    res.json({ leads, usingPersonalKey, source, engines_used, errors: run.errors, job_id: jobId });
 
     // Fire-and-forget background verification for harvested leads
     setImmediate(async () => {
@@ -2643,9 +2633,58 @@ app.post("/api/leads/harvest", async (req, res) => {
       console.log(`[Harvest] Background verification complete for ${leads.length} leads`);
     });
   } catch (err: any) {
-    console.error('[Harvest Error]', err.message);
-    res.status(500).json({ error: "internal server error" });
+    console.error('[Harvest Error]', err?.stack || err?.message);
+    // Discovery is best-effort: report what failed, per stage, instead of a
+    // generic 500 the UI cannot explain. The client still gets a job id.
+    const failedJobId = randomUUID();
+    const message = err?.message ?? String(err);
+    harvestJobs.set(failedJobId, {
+      status: "failed",
+      produced: 0,
+      engines_used: [],
+      errors: [message],
+      leads_count: 0,
+    });
+    pruneHarvestJobs();
+    res.status(200).json({
+      leads: [],
+      usingPersonalKey,
+      source: "error",
+      engines_used: [],
+      errors: [message],
+      job_id: failedJobId,
+      degraded: true,
+    });
   }
+});
+
+// --- Harvest job status (in-memory map, bounded to 50 jobs) ---
+interface HarvestJob {
+  status: "completed" | "running" | "failed";
+  produced: number;
+  engines_used: string[];
+  errors: string[];
+  leads_count: number;
+}
+const harvestJobs = new Map<string, HarvestJob>();
+function pruneHarvestJobs(): void {
+  while (harvestJobs.size > 50) {
+    const oldest = harvestJobs.keys().next().value;
+    harvestJobs.delete(oldest);
+  }
+}
+
+app.get("/api/leads/harvest/:jobId", (req, res) => {
+  const jobId = req.params.jobId;
+  const job = harvestJobs.get(jobId);
+  if (!job) return res.status(404).json({ error: "job not found" });
+  res.json({
+    status: job.status,
+    produced: job.produced,
+    engines_used: job.engines_used,
+    errors: job.errors,
+    leads_count: job.leads_count,
+  });
 });
 
 // --- Per-Lead Email Enrichment (called after harvest returns) ---
@@ -3671,21 +3710,14 @@ app.post("/api/hunt-orchestrate", async (req, res) => {
     }
   }
 
-  // Gate-2: Wathq is an optional add-on — a missing WATHQ_CONSUMER_KEY must not
-  // hard-block the route. If no CRs are supplied, degrade gracefully with a
-  // descriptive error instead of letting the orchestrator's auto-discovery
-  // hard-block (which reports 'WATHQ_CONSUMER_KEY not set').
+  // Gate-2: Wathq is an optional add-on. A missing WATHQ_CONSUMER_KEY must not
+  // hard-block the route: the orchestrator degrades by attempting Places first,
+  // then model-driven discovery, and never returns zero leads while another
+  // engine is available. When no key is configured the route reports
+  // wathq_path: 'skipped' plus the engines that were actually attempted.
   if (!process.env.WATHQ_CONSUMER_KEY && (!crs || crs.length === 0)) {
-    return res.status(200).json({
-      sector: sector.trim(),
-      geo: geo.trim(),
-      requested: parsedCount,
-      assembled: 0,
-      leads: [],
-      errors: ['WATHQ_CONSUMER_KEY not set — company discovery blocked; supply CRs directly via the `crs` input field'],
-      wathq_path: 'blocked',
-      signal_path: process.env.LEADJIN_USE_VERTEX !== 'false' ? 'vertex' : 'api_key',
-    });
+    // Degrade: let the orchestrator attempt Places -> model discovery rather
+    // than early-returning assembled: 0, wathq_path: 'blocked'.
   }
 
   console.log(`[API/hunt-orchestrate] sector=${sector} geo=${geo} count=${parsedCount} crs=${crs ? JSON.stringify(crs) : 'auto-discover'}`);
@@ -3695,6 +3727,15 @@ app.post("/api/hunt-orchestrate", async (req, res) => {
       { sector: sector.trim(), geo: geo.trim(), count: parsedCount, crs },
       { fetchWathqLead, enrichContact: (await import('./src/services/contactEnrichment.js')).enrichContact, db },
     );
+    if (!process.env.WATHQ_CONSUMER_KEY) {
+      (result as any).wathq_path = "skipped";
+    }
+    // engines_attempted is derived here (the orchestrator's duck-typed result
+    // is the wire shape). The orchestrator always falls back to model discovery
+    // when no Places key is configured or when Places yields no companies.
+    (result as any).engines_attempted = [];
+    if (process.env.GOOGLE_PLACES_API_KEY) (result as any).engines_attempted.push("places");
+    (result as any).engines_attempted.push("model");
     res.json(result);
   } catch (error: any) {
     console.error(`[API/hunt-orchestrate] Unexpected error:`, error.message);
@@ -3906,13 +3947,25 @@ async function processEmailQueue() {
     INNER JOIN users u ON u.id = eq.user_id
     WHERE eq.status = 'PENDING' 
     AND eq.lead_id = 'system'
-    AND eq.attempt_count < 3 
+    AND eq.attempt_count < 3
     AND (eq.scheduled_at IS NULL OR eq.scheduled_at <= datetime('now'))
+    AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email = eq.to_email COLLATE NOCASE)
     LIMIT 5
   `).all();
 
   for (const email of systemEmails as any[]) {
     try {
+      // HARD GATE: email-keyed suppression applies even without a lead row.
+      const gate = assertSendable(db, email.to_email);
+      if (!gate.ok) {
+        db.prepare("INSERT INTO email_events (email_queue_id, event_type, metadata) VALUES (?, 'suppressed', ?)").run(
+          email.id, JSON.stringify({ reason: gate.reason, to_email: email.to_email, path: 'system_smtp' })
+        );
+        db.prepare("UPDATE email_queue SET status = 'CANCELLED', last_error = ? WHERE id = ?").run(`suppressed: ${gate.reason}`, email.id);
+        console.log(`[EmailWorker] Skipping system email ${email.id} - ${gate.reason}`);
+        continue;
+      }
+
       // Check if SMTP is configured
       if (!transporter) {
         console.error(`[EmailWorker] Cannot send system email ${email.id}: SMTP not configured`);
@@ -3960,11 +4013,23 @@ async function processEmailQueue() {
     AND eq.attempt_count < 3 
     AND (eq.scheduled_at IS NULL OR eq.scheduled_at <= datetime('now'))
     AND (l.do_not_contact IS NULL OR l.do_not_contact != 1)
+    AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email = eq.to_email COLLATE NOCASE)
     LIMIT 5
   `).all();
 
   for (const email of pending as any[]) {
     try {
+      // HARD GATE: covers both Gmail API and SMTP fallback sends below.
+      const gate = assertSendable(db, email.to_email);
+      if (!gate.ok) {
+        db.prepare("INSERT INTO email_events (email_queue_id, event_type, metadata) VALUES (?, 'suppressed', ?)").run(
+          email.id, JSON.stringify({ reason: gate.reason, to_email: email.to_email, path: 'user_queue' })
+        );
+        db.prepare("UPDATE email_queue SET status = 'CANCELLED', last_error = ? WHERE id = ?").run(`suppressed: ${gate.reason}`, email.id);
+        console.log(`[EmailWorker] Skipping email ${email.id} - ${gate.reason}`);
+        continue;
+      }
+
       // N1: Check user ramadan override
       if (isHoliday) {
         const user = db.prepare("SELECT * FROM users WHERE id = ?").get(email.user_id) as any;
@@ -4202,6 +4267,15 @@ app.post("/api/auth/google/test", async (req: express.Request, res: express.Resp
 
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     
+    // HARD GATE: even the self-test send is subject to address suppression.
+    const gate = assertSendable(db, tokens.user_email);
+    if (!gate.ok) {
+      db.prepare("INSERT INTO activity_log (lead_id, user_id, type, description) VALUES (?, ?, 'EMAIL_SUPPRESSED', ?)").run(
+        null, user.id, `Suppressed connection-test email (${gate.reason}): ${tokens.user_email}`
+      );
+      return res.status(403).json({ error: 'Address is suppressed', reason: gate.reason });
+    }
+
     // Send a test email to the user themselves
     const subject = "LEADJIN Connection Test";
     const body = `Hello ${tokens.user_name},\n\nYour Google Workspace connection is active and ready for autonomous outreach.\n\nBest,\nLEADJIN Engine`;
@@ -4596,6 +4670,8 @@ app.get("/api/unsubscribe", (req, res) => {
   try {
     db.prepare("UPDATE email_queue SET status = 'CANCELLED' WHERE to_email = ? AND status = 'PENDING'").run(email);
     db.prepare("UPDATE leads SET do_not_contact = 1 WHERE email = ?").run(email);
+    // Suppression is address-keyed: this also blocks a future address with no lead row.
+    suppress(db, email as string, 'unsubscribed', 'unsubscribe_get');
     res.json({ status: "ok", message: "You have been unsubscribed from future emails." });
   } catch (error: any) {
     res.status(500).json({ error: "Failed to process unsubscribe request" });
@@ -5286,7 +5362,10 @@ app.post("/api/unsubscribe", (req, res) => {
   
   // Also cancel any pending emails to this address
   db.prepare("UPDATE email_queue SET status = 'CANCELLED' WHERE to_email = ? AND status = 'PENDING'").run(email);
-  
+
+  // Suppression is address-keyed: this also blocks a future address with no lead row.
+  suppress(db, email, 'unsubscribed', 'unsubscribe_post');
+
   res.json({ status: "ok", message: "You have been unsubscribed." });
 });
 

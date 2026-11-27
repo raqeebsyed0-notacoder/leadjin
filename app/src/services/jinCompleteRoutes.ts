@@ -29,6 +29,7 @@ import {
   getStakeholdersByDomain
 } from './jinLedger.js';
 import { getGenAI } from './genaiClient.js';
+import { dispatchJinCommand } from './jinTools.js';
 import {
   verifyEmailSMTP,
   verifyPhoneHLR,
@@ -591,6 +592,64 @@ export function createCompleteJinRouter(
     const localModelPath = process.env.LOCAL_MODEL_PATH || process.env.OLLAMA_MODEL || null;
     const isLocal = localModelPath !== null || process.env.LEADJIN_PROVIDER === 'ollama';
 
+    // --- Run the deterministic tool router FIRST ---
+    // When a tool runs we report tool_calls: [result] and let the model
+    // summarise the real result (the tool result is fed into the prompt).
+    const toolResult = await dispatchJinCommand(message, { db, userId: user.id });
+    if (toolResult) {
+      const isLocal = localModelPath !== null || process.env.LEADJIN_PROVIDER === 'ollama';
+      const localModel = localModelPath;
+      let reply: string;
+      let source: string;
+
+      if (isLocal) {
+        // Local model — feed the real tool result into the prompt so the model
+        // summarises the real result rather than answering from memory.
+        const ai = getGenAI();
+        const aiResponse = await ai.models.generateContent({
+          model: localModel || undefined,
+          contents: `${message}\n\n--- TOOL RESULT (${toolResult.tool}) ---\n${JSON.stringify(toolResult, null, 2)}`,
+          config: { temperature: 0.2, maxTokens: 1024 },
+        });
+        reply = cleanModelText(aiResponse.text || '[Jin] (no reply from local model)');
+        source = 'tool_calls';
+      } else {
+        // No local model — the stub path stays; just report the tool call.
+        const jinStatus = getEnhancedJinStatus(db);
+        const metrics = (jinStatus.allTime || {}) as any;
+        reply =
+          `[STUBBED — no local model configured] ` +
+          `Jin's tool ran: ${toolResult.tool}. ${toolResult.summary} ` +
+          `Current state: ${metrics.totalStakeholders || 0} stakeholders found, ` +
+          `${metrics.totalVerified || 0} verified, ` +
+          `${metrics.totalOutreachSent || 0} outreach sent. ` +
+          `Local LLM chat is offline — data-driven stub.`;
+        source = 'stubbed_no_local_model';
+      }
+
+      // Persist a lightweight chat log entry into the existing work log.
+      addWorkLogEntry(db, {
+        job_id: `chat-${Date.now()}`,
+        action_type: 'chat' as any,
+        entity_domain: user.email || 'unknown',
+        entity_name: user.email || 'unknown',
+        description: `Jin tool: ${toolResult.tool}`,
+        status: 'completed',
+        metadata: { user_id: user.id, source, tool: toolResult.tool, tool_result: toolResult }
+      });
+
+      res.json({
+        reply,
+        source,
+        localModel,
+        isStubbed: !isLocal,
+        timestamp: new Date().toISOString(),
+        tool_calls: [toolResult]
+      });
+      return;
+    }
+
+    // --- No tool ran: existing model path (unchanged) ---
     let reply: string;
     let source: string;
 
@@ -609,12 +668,6 @@ export function createCompleteJinRouter(
     } else {
       // No local model available — stub using existing Jin verify/status data.
       const jinStatus = getEnhancedJinStatus(db);
-      const verifyStatsRaw = getVerificationStats(db);
-      const recentWork = getRecentWorkLog(db, 10);
-      const activeJobs = getAllJobs().filter(
-        (j: any) => j.status !== 'completed' && j.status !== 'failed'
-      );
-
       const metrics = (jinStatus.allTime || {}) as any;
       reply =
         `[STUBBED — no local model configured] ` +
@@ -622,7 +675,6 @@ export function createCompleteJinRouter(
         `${metrics.totalStakeholders || 0} stakeholders found, ` +
         `${metrics.totalVerified || 0} verified, ` +
         `${metrics.totalOutreachSent || 0} outreach sent. ` +
-        `${activeJobs.length > 0 ? 'Active extraction jobs: ' + activeJobs.length + '. ' : 'No active jobs. '}` +
         `You said: "${message}". Local LLM chat is offline — this is a data-driven stub from Jin's verify/status tables.`;
       source = 'stubbed_no_local_model';
     }

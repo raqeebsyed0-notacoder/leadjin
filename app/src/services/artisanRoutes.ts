@@ -8,6 +8,7 @@
 
 import { Router, Request, Response } from 'express';
 import Database from 'better-sqlite3';
+import { assertSendable } from './suppressionGate.js';
 import {
   generateOutreach,
   OutreachLead,
@@ -192,9 +193,21 @@ export function createArtisanRouter(
       return res.status(400).json({ error: 'lead_id, message_type, and body are required' });
     }
 
-    const lead = db.prepare('SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?').get(lead_id, user.id) as any;
+    const lead = db.prepare('SELECT lead_id, email FROM leads WHERE lead_id = ? AND user_id = ?').get(lead_id, user.id) as any;
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    // HARD GATE: no outreach may be recorded as sent to a suppressed address,
+    // an address with do_not_contact=1, or a malformed address.
+    if (lead.email) {
+      const gate = assertSendable(db, lead.email);
+      if (!gate.ok) {
+        db.prepare("INSERT INTO activity_log (lead_id, user_id, type, description) VALUES (?, ?, 'EMAIL_SUPPRESSED', ?)").run(
+          lead_id, user.id, `Suppressed ${message_type} outreach (${gate.reason}): ${lead.email}`
+        );
+        return res.status(403).json({ error: 'Address is suppressed', reason: gate.reason });
+      }
     }
 
     try {

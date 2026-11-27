@@ -859,6 +859,174 @@ function parseOutreach(entry: any): { subject: string; body: string } {
   return { subject: 'Outreach', body: str };
 }
 
+type AuthMode = 'login' | 'register' | 'forgot' | 'reset';
+
+// Shared email/password signup-login modal. Google stays available as a secondary option.
+function AuthModal({ open, initialMode = 'login', resetToken = '', t, onClose, onAuthenticated, onGoogle }: {
+  open: boolean;
+  initialMode?: AuthMode;
+  t: any;
+  onClose: () => void;
+  onAuthenticated: (data: any, mode: AuthMode) => void;
+  onGoogle: () => void;
+  resetToken?: string;
+}) {
+  const [authMode, setAuthMode] = useState<AuthMode>(initialMode);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authSuccess, setAuthSuccess] = useState('');
+
+  useEffect(() => {
+    if (open) {
+      setAuthMode(initialMode);
+      setAuthEmail(resetToken);
+      setAuthError('');
+      setAuthSuccess('');
+    }
+  }, [open, initialMode, resetToken]);
+
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthSuccess('');
+    setAuthLoading(true);
+    try {
+      if (authMode === 'forgot') {
+        await fetch('/api/auth/forgot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authEmail }) });
+        setAuthSuccess('If that email exists, a reset link has been sent.');
+        setAuthLoading(false);
+        return;
+      }
+      if (authMode === 'reset') {
+        const res = await fetch('/api/auth/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: authEmail, password: authPassword }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Reset failed');
+        setAuthSuccess('Password updated. Please sign in.');
+        setAuthMode('login');
+        setAuthEmail('');
+        setAuthPassword('');
+        setAuthLoading(false);
+        return;
+      }
+      if (authMode === 'register' && authPassword !== authConfirmPassword) {
+        setAuthError('Passwords do not match.');
+        setAuthLoading(false);
+        return;
+      }
+      const res = await fetch(`/api/auth/${authMode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Authentication failed');
+      onAuthenticated(data, authMode);
+      onClose();
+      setAuthEmail('');
+      setAuthPassword('');
+      setAuthConfirmPassword('');
+    } catch (err: any) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+            className="glass rounded-[32px] p-8 w-full max-w-sm mx-4 space-y-6"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="space-y-1">
+              <h2 className="text-xl font-light">
+                {authMode === 'login' ? (t as any).signIn || 'Sign In' : authMode === 'register' ? (t as any).createAccount || 'Create Account' : authMode === 'forgot' ? (t as any).resetPassword || 'Reset Password' : (t as any).newPassword || 'New Password'}
+              </h2>
+              <p className="text-xs opacity-40">
+                {authMode === 'login' ? (t as any).accessWorkspace || 'Access your LEADJIN workspace.' : authMode === 'register' ? (t as any).startFreeAccount || 'Start your free account — no credit card needed.' : authMode === 'forgot' ? (t as any).enterEmailForReset || "Enter your email and we'll send a reset link." : (t as any).enterNewPassword || 'Enter your new password.'}
+              </p>
+            </div>
+            <form onSubmit={handleAuthSubmit} className="space-y-4">
+              {authMode !== 'reset' && (
+                <input
+                  type="email" placeholder={(t as any).emailAddress || 'Email address'} required
+                  value={authEmail} onChange={e => setAuthEmail(e.target.value)}
+                  className="w-full glass rounded-2xl px-5 py-4 text-sm outline-none focus:border-app-accent transition-all"
+                />
+              )}
+              {(authMode === 'login' || authMode === 'register' || authMode === 'reset') && (
+                <input
+                  type="password" placeholder={authMode === 'reset' ? ((t as any).newPassword || 'New password') : ((t as any).password || 'Password')} required
+                  value={authPassword} onChange={e => setAuthPassword(e.target.value)}
+                  className="w-full glass rounded-2xl px-5 py-4 text-sm outline-none focus:border-app-accent transition-all"
+                />
+              )}
+              {authMode === 'register' && (
+                <input
+                  type="password" placeholder={(t as any).confirmPassword || 'Confirm password'} required
+                  value={authConfirmPassword} onChange={e => setAuthConfirmPassword(e.target.value)}
+                  className="w-full glass rounded-2xl px-5 py-4 text-sm outline-none focus:border-app-accent transition-all"
+                />
+              )}
+              {authError && <p className="text-xs text-red-400">{authError}</p>}
+              {authSuccess && <p className="text-xs text-emerald-400">{authSuccess}</p>}
+              <button
+                type="submit" disabled={authLoading}
+                className="w-full py-4 bg-app-accent text-white rounded-2xl text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                {authLoading ? ((t as any).pleaseWait || 'Please wait...') : authMode === 'login' ? ((t as any).signIn || 'Sign In') : authMode === 'register' ? ((t as any).createAccount || 'Create Account') : authMode === 'forgot' ? ((t as any).sendResetLink || 'Send Reset Link') : ((t as any).setNewPassword || 'Set New Password')}
+              </button>
+            </form>
+            <div className="space-y-3">
+              {(authMode === 'login' || authMode === 'register') && (
+                <>
+                  <div className="flex items-center gap-3 opacity-40">
+                    <div className="h-px bg-current flex-1" />
+                    <span className="text-[10px] font-bold uppercase tracking-widest">or</span>
+                    <div className="h-px bg-current flex-1" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onGoogle}
+                    className="w-full py-3 glass rounded-2xl text-xs font-bold uppercase tracking-widest hover:border-app-accent transition-colors"
+                  >
+                    Sign in with Google
+                  </button>
+                </>
+              )}
+              <div className="flex justify-between text-xs opacity-40">
+                {authMode === 'login' && (
+                  <>
+                    <button onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthSuccess(''); }} className="hover:text-app-accent transition-colors">{(t as any).forgotPassword || 'Forgot password?'}</button>
+                    <button onClick={() => { setAuthMode('register'); setAuthError(''); setAuthSuccess(''); }} className="text-app-accent hover:underline">{(t as any).dontHaveAccount || 'Sign up'}</button>
+                  </>
+                )}
+                {authMode === 'register' && (
+                  <button onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); }} className="mx-auto text-app-accent hover:underline">{(t as any).alreadyHaveAccount || 'Already have an account? Sign in'}</button>
+                )}
+                {(authMode === 'forgot' || authMode === 'reset') && (
+                  <button onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); }} className="mx-auto hover:text-app-accent transition-colors">{(t as any).backToSignIn || 'Back to sign in'}</button>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
 function AppContent() {
   const [industries, setIndustries] = useState('Legal, Consulting, Finance');
   const [companySize, setCompanySize] = useState('10-50');
@@ -900,13 +1068,8 @@ function AppContent() {
   const [currentUser, setCurrentUser] = useState<{ id: number; email: string; subscription_plan: string; monthly_searches_used: number; monthly_searches_limit: number; subscription_expires_at?: string; trial_ends_at?: string; subscription_status?: string; subscription_days_left?: number; subscription_active?: boolean } | null>(null);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot' | 'reset'>('login');
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState('');
-  const [authSuccess, setAuthSuccess] = useState('');
+  const [authInitialMode, setAuthInitialMode] = useState<AuthMode>('login');
+  const [authResetToken, setAuthResetToken] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [currentView, setCurrentView] = useState<'harvest' | 'crm' | 'analytics' | 'settings'>('harvest');
   const [crmLeads, setCrmLeads] = useState<any[]>([]);
@@ -1192,8 +1355,8 @@ function AppContent() {
     const params = new URLSearchParams(window.location.search);
     const resetToken = params.get('reset');
     if (resetToken) {
-      setAuthMode('reset');
-      setAuthEmail(resetToken); // reuse authEmail field to carry token
+      setAuthInitialMode('reset');
+      setAuthResetToken(resetToken);
       setShowAuthModal(true);
       window.history.replaceState({}, '', '/');
     }
@@ -1665,73 +1828,6 @@ function AppContent() {
     }
   };
 
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError('');
-    setAuthSuccess('');
-    setAuthLoading(true);
-    try {
-      if (authMode === 'forgot') {
-        await fetch('/api/auth/forgot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authEmail }) });
-        setAuthSuccess('If that email exists, a reset link has been sent.');
-        setAuthLoading(false);
-        return;
-      }
-      if (authMode === 'reset') {
-        const res = await fetch('/api/auth/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: authEmail, password: authPassword }) });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Reset failed');
-        setAuthSuccess('Password updated. Please sign in.');
-        setAuthMode('login');
-        setAuthEmail('');
-        setAuthPassword('');
-        setAuthLoading(false);
-        return;
-      }
-      if (authMode === 'register' && authPassword !== authConfirmPassword) {
-        setAuthError('Passwords do not match.');
-        setAuthLoading(false);
-        return;
-      }
-      const res = await fetch(`/api/auth/${authMode}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: authEmail, password: authPassword })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Authentication failed');
-      setAuthToken(data.token);
-      setCurrentUser(data.user);
-      setShowAuthModal(false);
-      setAuthEmail('');
-      setAuthPassword('');
-      setAuthConfirmPassword('');
-      // Load this user's company profile from server to prevent stale data from previous user
-      fetch('/api/user/profile', { headers: { Authorization: `Bearer ${data.token}` } })
-        .then(r => r.json())
-        .then(profile => {
-          if (profile && !profile.error) {
-            const p = { name: profile.company_name || '', tagline: profile.company_tagline || '', email: profile.company_email || '', phone: profile.company_phone || '', website: profile.company_website || '', address: profile.company_address || '' };
-            setCompanyProfile(p);
-            localStorage.setItem('leadjin_company_profile', JSON.stringify(p));
-          } else {
-            setCompanyProfile({ name: '', tagline: '', email: '', phone: '', website: '', address: '' });
-            localStorage.removeItem('leadjin_company_profile');
-          }
-        })
-        .catch(() => {});
-      // Clear previous user's local leads — each user has their own CRM data on server
-      setLeads([]);
-      setContactedLeads(new Set());
-      localStorage.removeItem('leadjin_leads');
-      localStorage.removeItem('leadjin_contacted');
-      setNotification({ message: authMode === 'register' ? 'Account created!' : 'Signed in successfully.', type: 'success' });
-    } catch (err: any) {
-      setAuthError(err.message);
-    } finally {
-      setAuthLoading(false);
-    }
-  };
 
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${authToken}` } }).catch(() => {});
@@ -3551,7 +3647,7 @@ function AppContent() {
                             <div className="glass p-6 rounded-[24px] space-y-3">
                               <p className="text-sm opacity-60">Sign in to use LEADJIN and track your monthly searches.</p>
                               <button
-                                onClick={() => { setAuthMode('login'); setShowAuthModal(true); }}
+                                onClick={() => { setAuthInitialMode('login'); setShowAuthModal(true); }}
                                 className="px-6 py-2.5 bg-app-accent text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-opacity"
                               >
                                 Sign In / Create Account
@@ -5032,76 +5128,44 @@ function AppContent() {
         )}
       </AnimatePresence>
 
-      {/* Auth Modal */}
-      <AnimatePresence>
-        {showAuthModal && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
-            onClick={() => setShowAuthModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
-              className="glass rounded-[32px] p-8 w-full max-w-sm mx-4 space-y-6"
-              onClick={e => e.stopPropagation()}
-            >
-              <div className="space-y-1">
-                <h2 className="text-xl font-light">
-                  {authMode === 'login' ? (t as any).signIn || 'Sign In' : authMode === 'register' ? (t as any).createAccount || 'Create Account' : authMode === 'forgot' ? (t as any).resetPassword || 'Reset Password' : (t as any).newPassword || 'New Password'}
-                </h2>
-                <p className="text-xs opacity-40">
-                  {authMode === 'login' ? (t as any).accessWorkspace || 'Access your LEADJIN workspace.' : authMode === 'register' ? (t as any).startFreeAccount || 'Start your free account — no credit card needed.' : authMode === 'forgot' ? (t as any).enterEmailForReset || "Enter your email and we'll send a reset link." : (t as any).enterNewPassword || 'Enter your new password.'}
-                </p>
-              </div>
-              <form onSubmit={handleAuthSubmit} className="space-y-4">
-                {authMode !== 'reset' && (
-                  <input
-                    type="email" placeholder={(t as any).emailAddress || 'Email address'} required
-                    value={authEmail} onChange={e => setAuthEmail(e.target.value)}
-                    className="w-full glass rounded-2xl px-5 py-4 text-sm outline-none focus:border-app-accent transition-all"
-                  />
-                )}
-                {(authMode === 'login' || authMode === 'register' || authMode === 'reset') && (
-                  <input
-                    type="password" placeholder={authMode === 'reset' ? ((t as any).newPassword || 'New password') : ((t as any).password || 'Password')} required
-                    value={authPassword} onChange={e => setAuthPassword(e.target.value)}
-                    className="w-full glass rounded-2xl px-5 py-4 text-sm outline-none focus:border-app-accent transition-all"
-                  />
-                )}
-                {authMode === 'register' && (
-                  <input
-                    type="password" placeholder={(t as any).confirmPassword || 'Confirm password'} required
-                    value={authConfirmPassword} onChange={e => setAuthConfirmPassword(e.target.value)}
-                    className="w-full glass rounded-2xl px-5 py-4 text-sm outline-none focus:border-app-accent transition-all"
-                  />
-                )}
-                {authError && <p className="text-xs text-red-400">{authError}</p>}
-                {authSuccess && <p className="text-xs text-emerald-400">{authSuccess}</p>}
-                <button
-                  type="submit" disabled={authLoading}
-                  className="w-full py-4 bg-app-accent text-white rounded-2xl text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-opacity disabled:opacity-50"
-                >
-                  {authLoading ? ((t as any).pleaseWait || 'Please wait...') : authMode === 'login' ? ((t as any).signIn || 'Sign In') : authMode === 'register' ? ((t as any).createAccount || 'Create Account') : authMode === 'forgot' ? ((t as any).sendResetLink || 'Send Reset Link') : ((t as any).setNewPassword || 'Set New Password')}
-                </button>
-              </form>
-              <div className="flex justify-between text-xs opacity-40">
-                {authMode === 'login' && (
-                  <>
-                    <button onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthSuccess(''); }} className="hover:text-app-accent transition-colors">{(t as any).forgotPassword || 'Forgot password?'}</button>
-                    <button onClick={() => { setAuthMode('register'); setAuthError(''); setAuthSuccess(''); }} className="text-app-accent hover:underline">{(t as any).dontHaveAccount || 'Sign up'}</button>
-                  </>
-                )}
-                {authMode === 'register' && (
-                  <button onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); }} className="mx-auto text-app-accent hover:underline">{(t as any).alreadyHaveAccount || 'Already have an account? Sign in'}</button>
-                )}
-                {(authMode === 'forgot' || authMode === 'reset') && (
-                  <button onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); }} className="mx-auto hover:text-app-accent transition-colors">{(t as any).backToSignIn || 'Back to sign in'}</button>
-                )}
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Auth Modal — email/password first, Google secondary */}
+      <AuthModal
+        open={showAuthModal}
+        initialMode={authInitialMode}
+        resetToken={authResetToken}
+        t={t}
+        onClose={() => setShowAuthModal(false)}
+        onGoogle={() => {
+          fetch('/api/auth/google')
+            .then(r => r.json())
+            .then(data => {
+              if (data.url) window.open(data.url, 'google_auth', 'width=500,height=620,left=400,top=100');
+            })
+            .catch(() => setNotification({ message: 'Failed to reach server. Is it running?', type: 'error' }));
+        }}
+        onAuthenticated={(data, mode) => {
+          setAuthToken(data.token);
+          setCurrentUser(data.user);
+          fetch('/api/user/profile', { headers: { Authorization: `Bearer ${data.token}` } })
+            .then(r => r.json())
+            .then(profile => {
+              if (profile && !profile.error) {
+                const p = { name: profile.company_name || '', tagline: profile.company_tagline || '', email: profile.company_email || '', phone: profile.company_phone || '', website: profile.company_website || '', address: profile.company_address || '' };
+                setCompanyProfile(p);
+                localStorage.setItem('leadjin_company_profile', JSON.stringify(p));
+              } else {
+                setCompanyProfile({ name: '', tagline: '', email: '', phone: '', website: '', address: '' });
+                localStorage.removeItem('leadjin_company_profile');
+              }
+            })
+            .catch(() => {});
+          setLeads([]);
+          setContactedLeads(new Set());
+          localStorage.removeItem('leadjin_leads');
+          localStorage.removeItem('leadjin_contacted');
+          setNotification({ message: mode === 'register' ? 'Account created!' : 'Signed in successfully.', type: 'success' });
+        }}
+      />
 
       {/* Notification Toast */}
       <AnimatePresence>
@@ -5145,6 +5209,7 @@ function AppWithLanding() {
   const [showDashboard, setShowDashboard] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [hasAuth, setHasAuth] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [needsCompanyProfile, setNeedsCompanyProfile] = useState(false);
   const [companyForm, setCompanyForm] = useState({ company_name: '', company_tagline: '', company_email: '', company_phone: '', company_website: '' });
   const [companySaving, setCompanySaving] = useState(false);
@@ -5246,7 +5311,21 @@ function AppWithLanding() {
           <div className="animate-pulse text-sm opacity-50">Loading...</div>
         </div>
       }>
-        <LandingPage onEnterApp={handleEnterApp} />
+        <>
+          <LandingPage onEnterApp={() => setShowAuthModal(true)} />
+          <AuthModal
+            open={showAuthModal}
+            initialMode="login"
+            t={translations.en}
+            onClose={() => setShowAuthModal(false)}
+            onGoogle={handleEnterApp}
+            onAuthenticated={(data) => {
+              try { localStorage.setItem('leadjin_token', data.token); } catch (e) {}
+              setHasAuth(true);
+              setShowDashboard(true);
+            }}
+          />
+        </>
       </Suspense>
     );
   }

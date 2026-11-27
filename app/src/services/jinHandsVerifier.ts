@@ -12,6 +12,12 @@
 import { randomUUID } from 'crypto';
 import { addVerificationProof, type VerificationProof } from './jinLedger.js';
 import Database from 'better-sqlite3';
+import {
+  overallStatus as computeOverallStatus,
+  recordVerification,
+  type StageVerdict,
+  type VerificationStatus,
+} from './verificationRecord.js';
 
 // Verification result types
 export interface SMTPVerificationResult {
@@ -23,6 +29,8 @@ export interface SMTPVerificationResult {
   smtpResponse: string;
   verifiedAt: string;
   confidence: number; // 0-100
+  status: VerificationStatus;
+  reason: string;
 }
 
 export interface PhoneVerificationResult {
@@ -34,6 +42,8 @@ export interface PhoneVerificationResult {
   reachable: boolean;
   verifiedAt: string;
   confidence: number;
+  status: VerificationStatus;
+  reason: string;
 }
 
 export interface LocationVerificationResult {
@@ -46,6 +56,8 @@ export interface LocationVerificationResult {
   nearbyLandmarks?: string[];
   verifiedAt: string;
   confidence: number;
+  status: VerificationStatus;
+  reason: string;
 }
 
 export interface TripleCheckResult {
@@ -53,10 +65,11 @@ export interface TripleCheckResult {
   email: SMTPVerificationResult | null;
   phone: PhoneVerificationResult | null;
   location: LocationVerificationResult | null;
-  overallStatus: 'verified' | 'partial' | 'unverified' | 'failed';
+  overallStatus: VerificationStatus;
   verificationScore: number; // 0-100
   signedOffBy: 'jin_automated' | 'jin_assisted';
   signedOffAt: string;
+  stageResults: StageVerdict[];
 }
 
 // In-memory cache for verification results (1 hour TTL)
@@ -102,7 +115,9 @@ export async function verifyEmailSMTP(
     mxRecords: [],
     smtpResponse: '',
     verifiedAt: new Date().toISOString(),
-    confidence: 0
+    confidence: 0,
+    status: 'unverified',
+    reason: 'smtp_not_attempted'
   };
 
   try {
@@ -110,6 +125,8 @@ export async function verifyEmailSMTP(
     const domain = email.split('@')[1];
     if (!domain) {
       result.smtpResponse = 'Invalid email format';
+      result.status = 'invalid';
+      result.reason = 'invalid_email_format';
       return result;
     }
 
@@ -117,6 +134,8 @@ export async function verifyEmailSMTP(
     const mxRecords = await dns.resolveMx(domain);
     if (!mxRecords || mxRecords.length === 0) {
       result.smtpResponse = 'No MX records found';
+      result.status = 'unverified';
+      result.reason = 'no_mx_records';
       return result;
     }
 
@@ -207,18 +226,35 @@ export async function verifyEmailSMTP(
     result.catchAll = smtpResult.catchAll;
     result.smtpResponse = smtpResult.response;
     result.mailboxExists = smtpResult.deliverable;
-    
-    // Calculate confidence based on results
-    if (smtpResult.deliverable) {
-      result.confidence = 95; // High confidence for successful SMTP
-    } else if (smtpResult.response.includes('user unknown')) {
-      result.confidence = 90; // High confidence that email doesn't exist
-    } else {
-      result.confidence = 50; // Uncertain due to server restrictions
-    }
 
-    // Log to database if available
-    if (db) {
+    // Only a real SMTP response can produce a conclusive status.
+    const smtpCode = Number(smtpResult.response.match(/^(\d{3})/)?.[1] ?? 0);
+    const verdict: { status: VerificationStatus; reason: string } =
+      smtpResult.deliverable && smtpCode === 251
+        ? { status: 'catch_all', reason: 'smtp_rcpt_forwarded_251' }
+        : smtpResult.deliverable && smtpCode === 250
+          ? { status: 'verified', reason: 'smtp_rcpt_250_accepted' }
+          : [550, 551, 552].includes(smtpCode) || /user unknown/i.test(smtpResult.response)
+            ? { status: 'invalid', reason: 'smtp_recipient_rejected' }
+            : smtpCode >= 400 && smtpCode < 500
+              ? { status: 'risky', reason: 'smtp_temporary_failure' }
+              : { status: 'unverified', reason: `smtp_inconclusive: ${smtpResult.response}` };
+    result.status = verdict.status;
+    result.reason = verdict.reason;
+
+    // Confidence tracks the verdict, not wishful thinking.
+    const confidenceByStatus: Record<VerificationStatus, number> = {
+      verified: 95,
+      partially_verified: 70,
+      risky: 50,
+      catch_all: 40,
+      invalid: 90,
+      unverified: 0,
+    };
+    result.confidence = confidenceByStatus[result.status];
+
+    // Log a proof only when a real provider response backs the claim.
+    if (db && result.status === 'verified') {
       const proof: VerificationProof = {
         stakeholder_id: `email:${email}`,
         verification_type: 'email_smtp',
@@ -243,13 +279,15 @@ export async function verifyEmailSMTP(
 
   } catch (error: any) {
     result.smtpResponse = `Error: ${error.message}`;
+    result.status = 'unverified';
+    result.reason = `smtp_lookup_error: ${error.message}`;
     result.confidence = 0;
     return result;
   }
 }
 
 /**
- * HLR-style Phone Verification
+ * HLR-style Phone Verification (STUB -> unverified).
  * In production, this would integrate with telecom HLR lookup APIs
  * For now, we use pattern validation and format checking
  */
@@ -267,7 +305,9 @@ export async function verifyPhoneHLR(
     countryCode: '',
     reachable: false,
     verifiedAt: new Date().toISOString(),
-    confidence: 0
+    confidence: 0,
+    status: 'unverified',
+    reason: 'hlr_lookup_not_configured'
   };
 
   try {
@@ -301,7 +341,7 @@ export async function verifyPhoneHLR(
       normalized = normalized.slice(4);
     }
 
-    // Validate length based on country
+    // Validate length based on country — this is FORMAT evidence only, never HLR.
     const validLengths: Record<string, number> = {
       'SA': 9,  // Saudi
       'AE': 9,  // UAE
@@ -312,25 +352,15 @@ export async function verifyPhoneHLR(
     };
 
     const expectedLength = validLengths[result.countryCode];
-    if (expectedLength && normalized.length === expectedLength) {
-      result.valid = true;
-      
-      // Determine line type based on prefix (Saudi-specific)
+    const formatValid = !!expectedLength && normalized.length === expectedLength;
+    result.valid = formatValid;
+
+    if (formatValid) {
+      // Prefix heuristics retained as enrichment metadata only (carrier guess).
       if (result.countryCode === 'SA') {
         const prefix = normalized.substring(0, 2);
-        // Saudi mobile prefixes: 50, 53, 54, 55, 56, 57, 58, 59
         const mobilePrefixes = ['50', '53', '54', '55', '56', '57', '58', '59'];
-        if (mobilePrefixes.includes(prefix)) {
-          result.lineType = 'mobile';
-          result.reachable = true;
-          result.confidence = 75;
-        } else {
-          result.lineType = 'landline';
-          result.reachable = true;
-          result.confidence = 70;
-        }
-        
-        // Major carriers (for enrichment)
+        result.lineType = mobilePrefixes.includes(prefix) ? 'mobile' : 'landline';
         if (prefix.startsWith('5')) {
           if (['50', '51', '52'].includes(prefix)) result.carrier = 'STC';
           else if (['53', '54'].includes(prefix)) result.carrier = 'Mobily';
@@ -338,49 +368,35 @@ export async function verifyPhoneHLR(
         }
       } else {
         result.lineType = 'unknown';
-        result.reachable = true;
-        result.confidence = 60;
       }
-    } else {
-      result.valid = false;
-      result.confidence = 30;
     }
 
-    // Log to database if available
-    if (db && result.valid) {
-      const proof: VerificationProof = {
-        stakeholder_id: `phone:${phone}`,
-        verification_type: 'phone_hlr',
-        proof_data: {
-          method: 'HLR_STYLE_LOOKUP',
-          timestamp: result.verifiedAt,
-          source: result.countryCode,
-          confidence: result.confidence,
-          verification_details: {
-            normalized_number: normalized,
-            line_type: result.lineType,
-            carrier: result.carrier,
-            reachable: result.reachable
-          }
-        },
-        verified_by: 'jin_automated'
-      };
-      addVerificationProof(db, proof);
-    }
+    // No real HLR provider is configured: no reachability claim, no proof row.
+    result.reachable = false;
+    result.confidence = 0;
+    const verdict: { status: VerificationStatus; reason: string } = formatValid
+      ? { status: 'unverified', reason: 'hlr_lookup_not_configured' }
+      : { status: 'invalid', reason: 'phone_format_invalid' };
+    result.status = verdict.status;
+    result.reason = verdict.reason;
 
     setCachedVerification(cacheKey, result);
     return result;
 
   } catch (error: any) {
     result.valid = false;
+    result.reachable = false;
     result.confidence = 0;
+    result.status = 'unverified';
+    result.reason = `hlr_lookup_error: ${error.message}`;
     return result;
   }
 }
 
 /**
- * Regional HQ Location Verification
- * Uses geocoding to verify company headquarters location
+ * Regional HQ Location Verification (STUB -> unverified by default).
+ * The original module did a city-name string match; that is not geocoding and
+ * not a registry lookup, so it cannot substantiate a `verified` address.
  */
 export async function verifyRegionalHQ(
   domain: string,
@@ -399,7 +415,9 @@ export async function verifyRegionalHQ(
     verifiedAddress: false,
     regionalMatch: false,
     verifiedAt: new Date().toISOString(),
-    confidence: 0
+    confidence: 0,
+    status: 'unverified',
+    reason: 'regional_hq_lookup_not_configured'
   };
 
   try {
@@ -427,10 +445,11 @@ export async function verifyRegionalHQ(
     );
     
     if (matchedCity) {
+      // String match is a signal about the input, not external verification.
       result.regionalMatch = true;
-      result.verifiedAddress = true;
-      result.confidence = 80;
-      
+      result.verifiedAddress = false;
+      result.confidence = 0;
+
       // Determine nearby landmarks based on city
       if (saudiCities.includes(matchedCity)) {
         if (matchedCity === 'Riyadh') {
@@ -443,14 +462,26 @@ export async function verifyRegionalHQ(
       }
     } else {
       result.regionalMatch = false;
-      result.confidence = 40;
+      result.confidence = 0;
     }
+
+    const verdict: { status: VerificationStatus; reason: string } = {
+      status: 'unverified',
+      reason: matchedCity
+        ? 'regional_hq_lookup_not_configured'
+        : 'regional_city_not_recognized',
+    };
+    result.status = verdict.status;
+    result.reason = verdict.reason;
 
     setCachedVerification(cacheKey, result);
     return result;
 
   } catch (error: any) {
+    result.verifiedAddress = false;
     result.confidence = 0;
+    result.status = 'unverified';
+    result.reason = `regional_hq_lookup_error: ${error.message}`;
     return result;
   }
 }
@@ -478,7 +509,8 @@ export async function performTripleCheck(
     overallStatus: 'unverified',
     verificationScore: 0,
     signedOffBy: 'jin_automated',
-    signedOffAt: new Date().toISOString()
+    signedOffAt: new Date().toISOString(),
+    stageResults: []
   };
 
   // Run verifications in parallel where possible
@@ -510,46 +542,105 @@ export async function performTripleCheck(
 
   await Promise.all(verifications);
 
-  // Calculate overall verification score
-  let totalScore = 0;
-  let checksPerformed = 0;
+  // Stage evidence — every stage, including skipped ones, gets a status + reason.
+  const stages: StageVerdict[] = [];
+  stages.push(result.email
+    ? {
+        stage: 'email_smtp',
+        status: result.email.status,
+        reason: result.email.reason,
+        method: 'SMTP_HANDSHAKE',
+        confidence: result.email.confidence,
+        evidence: {
+          mx_records: result.email.mxRecords,
+          smtp_response: result.email.smtpResponse,
+          deliverable: result.email.deliverable,
+          catch_all: result.email.catchAll,
+        },
+      }
+    : { stage: 'email_smtp', status: 'unverified', reason: 'not_provided', method: 'SMTP_HANDSHAKE', confidence: 0 });
+  stages.push(result.phone
+    ? {
+        stage: 'phone_hlr',
+        status: result.phone.status,
+        reason: result.phone.reason,
+        method: 'HLR_STYLE_LOOKUP',
+        confidence: result.phone.confidence,
+        evidence: {
+          country_code: result.phone.countryCode,
+          line_type: result.phone.lineType,
+          carrier_guess: result.phone.carrier,
+          format_valid: result.phone.valid,
+        },
+      }
+    : { stage: 'phone_hlr', status: 'unverified', reason: 'not_provided', method: 'HLR_STYLE_LOOKUP', confidence: 0 });
+  stages.push(result.location
+    ? {
+        stage: 'regional_hq',
+        status: result.location.status,
+        reason: result.location.reason,
+        method: 'REGIONAL_HQ_PATTERN',
+        confidence: result.location.confidence,
+        evidence: {
+          headquarters: result.location.headquarters,
+          regional_match: result.location.regionalMatch,
+          verified_address: result.location.verifiedAddress,
+        },
+      }
+    : { stage: 'regional_hq', status: 'unverified', reason: 'not_provided', method: 'REGIONAL_HQ_PATTERN', confidence: 0 });
 
-  if (result.email) {
-    totalScore += result.email.confidence * 0.4; // 40% weight
-    checksPerformed++;
+  // Weakest conclusive stage wins; a stubbed stage caps overall at partially_verified.
+  const verdictStatus = computeOverallStatus(stages);
+  const overall: { status: VerificationStatus; reason: string } =
+    verdictStatus === 'partially_verified'
+      ? { status: 'partially_verified', reason: 'weakest_stage_or_missing_provider' }
+      : verdictStatus === 'verified'
+        ? { status: 'verified', reason: 'all_stages_conclusive' }
+        : { status: verdictStatus, reason: 'weakest_conclusive_stage' };
+  result.overallStatus = overall.status;
+  result.stageResults = stages;
+
+  // Status-weighted score (stub stages contribute zero).
+  const weightByStatus: Record<VerificationStatus, number> = {
+    verified: 100,
+    partially_verified: 70,
+    catch_all: 50,
+    risky: 40,
+    invalid: 0,
+    unverified: 0,
+  };
+  result.verificationScore = Math.round(
+    stages.reduce((sum, s) => sum + weightByStatus[s.status], 0) / stages.length
+  );
+
+  // Persistent evidence on EVERY call. `db` is optional: verificationRecord
+  // falls back to a configured/injected app DB and never throws if absent.
+  for (const s of stages) {
+    recordVerification(db, {
+      lead_id: stakeholderId,
+      email: email ?? null,
+      stage: s.stage,
+      method: s.method,
+      status: s.status,
+      confidence: s.confidence ?? 0,
+      evidence_json: s.evidence ?? {},
+      source_url: s.source_url ?? null,
+      reason: s.reason,
+    });
   }
-
-  if (result.phone) {
-    totalScore += result.phone.confidence * 0.35; // 35% weight
-    checksPerformed++;
-  }
-
-  if (result.location) {
-    totalScore += result.location.confidence * 0.25; // 25% weight
-    checksPerformed++;
-  }
-
-  if (checksPerformed > 0) {
-    result.verificationScore = Math.round(totalScore / checksPerformed * checksPerformed);
-  }
-
-  // Determine overall status
-  const emailPass = result.email?.deliverable ?? false;
-  const phonePass = result.phone?.reachable ?? false;
-  const locationPass = result.location?.regionalMatch ?? false;
-
-  const passedChecks = [emailPass, phonePass, locationPass].filter(Boolean).length;
-  const totalChecks = [email, phone, claimedLocation].filter(Boolean).length;
-
-  if (totalChecks === 0) {
-    result.overallStatus = 'failed';
-  } else if (passedChecks === totalChecks) {
-    result.overallStatus = 'verified';
-  } else if (passedChecks > 0) {
-    result.overallStatus = 'partial';
-  } else {
-    result.overallStatus = 'unverified';
-  }
+  recordVerification(db, {
+    lead_id: stakeholderId,
+    email: email ?? null,
+    stage: 'overall',
+    method: 'WEAKEST_STAGE',
+    status: overall.status,
+    confidence: result.verificationScore,
+    evidence_json: {
+      reason: overall.reason,
+      stages: stages.map(s => ({ stage: s.stage, status: s.status, reason: s.reason })),
+    },
+    reason: overall.reason,
+  });
 
   console.log(`[Jin:Hands] Triple-check complete: ${result.overallStatus} (Score: ${result.verificationScore})`);
 
