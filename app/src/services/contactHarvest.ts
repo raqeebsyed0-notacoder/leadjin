@@ -17,11 +17,10 @@
  *                      contact page set and regex-extract emails, Saudi phones,
  *                      wa.me links and social handles from the HTML.
  *   2. social-intel — socialIntelligence.mineSocialProfiles(name, company, domain).
- *   3. hunter       — Hunter.io domain_search (only when HUNTER_API_KEY is set).
- *   4. public-linkedin — TinyFish CLI for public LinkedIn profile URLs; parse
+ *   3. public-linkedin — TinyFish CLI for public LinkedIn profile URLs; parse
  *                        ONLY what the search-result snippet states and NEVER
  *                        fetch linkedin.com itself.
- *   5. verify       — verifyEmail() on every harvested email and record status.
+ *   4. verify       — verifyEmail() on every harvested email and record status.
  *
  * Deduplication rule (applied inside this leg and at the pipeline append):
  *   email → linkedin → normalised name + domain.
@@ -103,12 +102,12 @@ export interface HarvestedContact {
   /** LinkedIn profile URL when found. */
   linkedin: string;
   /** Where this contact came from. */
-  source: "company-site" | "social-intelligence" | "hunter" | "public-linkedin";
+  source: "company-site" | "social-intelligence" | "public-linkedin";
   /** The URL the data was collected from. */
   evidence_url: string;
   /** ISO-8601 snapshot of the harvest run. */
   discovered_at: string;
-  /** Verified rung for the email (see leg 5). */
+  /** Verified rung for the email (see leg 4). */
   email_status: "verified" | "unverified";
   /** True only when email is deliverable (verifier). */
   email_verified: boolean;
@@ -407,107 +406,7 @@ async function mineSocialLeg(
 }
 
 // ---------------------------------------------------------------------------
-// Leg 3 — Hunter.io domain search
-// ---------------------------------------------------------------------------
-
-interface HunterExtraction {
-  contacts: HarvestedContact[];
-  errors: string[];
-  names: string[];
-}
-
-async function hunterLeg(
-  company: string,
-  domain?: string,
-): Promise<HunterExtraction> {
-  const contacts: HarvestedContact[] = [];
-  const errors: string[] = [];
-  const names: string[] = [];
-
-  const key = process.env.HUNTER_API_KEY;
-  if (!key) {
-    errors.push("hunter: skipped (HUNTER_API_KEY not set)");
-    return { contacts, errors, names };
-  }
-
-  const sanitized = key.replace(/[^a-zA-Z0-9]/g, "_");
-  const url = `https://api.hunter.io/v2/domain_search?domain=${encodeURIComponent(domain ?? company)}&api_key=${sanitized}`;
-
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    const res = await fetch(url, { signal: ctrl.signal });
-    clearTimeout(timer);
-    if (!res.ok) {
-      errors.push(`hunter: domain search HTTP ${res.status} for ${domain ?? company}`);
-      return { contacts, errors, names };
-    }
-    const body = (await res.json()) as {
-      data?: { emails?: { email: string }[]; targets?: { name?: string; first_name?: string; last_name?: string }[] };
-      meta?: { found?: number };
-    };
-    clearTimeout(timer);
-
-    const emails = body.data?.emails ?? (body as any)?.emails ?? [];
-    const targets = body.data?.targets ?? (body as any)?.targets ?? [];
-
-    for (const t of targets) {
-      const raw = t.name ?? `${t.first_name ?? ""} ${t.last_name ?? ""}`.trim();
-      const name = raw.replace(/\s+/g, " ").trim();
-      if (!name) continue;
-      names.push(name);
-
-      const email =
-        (t as any)?.email ||
-        (emails.find((e: { email: string }) => e.email.toLowerCase().includes(name.toLowerCase()))?.email ?? "");
-
-      if (!email) continue;
-
-      const contact: HarvestedContact = {
-        name,
-        title: (t as any)?.title ?? (t as any)?.role ?? "",
-        email: email.toLowerCase(),
-        phone: "",
-        whatsapp: "",
-        linkedin: "",
-        source: "hunter",
-        evidence_url: url,
-        discovered_at: new Date().toISOString(),
-        email_status: "unverified",
-        email_verified: false,
-        social_links: [],
-      };
-      contacts.push(contact);
-    }
-
-    // Also surface every email the domain lookup found (may include corporate mailboxes).
-    for (const e of emails) {
-      const email = e.email.toLowerCase();
-      if (contacts.some((c) => c.email === email)) continue;
-      contacts.push({
-        name: "",
-        title: "",
-        email,
-        phone: "",
-        whatsapp: "",
-        linkedin: "",
-        source: "hunter",
-        evidence_url: url,
-        discovered_at: new Date().toISOString(),
-        email_status: "unverified",
-        email_verified: false,
-        social_links: [],
-      });
-    }
-  } catch (e: any) {
-    errors.push(`hunter: domain search failed (${e?.message ?? String(e)})`);
-  }
-
-  return { contacts, errors, names };
-}
-
-// ---------------------------------------------------------------------------
-// Leg 4 — public LinkedIn search via the TinyFish CLI
+// Leg 3 — public LinkedIn search via the TinyFish CLI
 // ---------------------------------------------------------------------------
 
 interface TinyfishExtraction {
@@ -622,7 +521,7 @@ async function tinyfishLeg(
 }
 
 // ---------------------------------------------------------------------------
-// Leg 5 — email verification
+// Leg 4 — email verification
 // ---------------------------------------------------------------------------
 
 /** Memoised verifier so repeated probes of the same address do not re-probe. */
@@ -695,24 +594,7 @@ export async function harvestContactsForCompany(
     }
   }
 
-  // 3. Hunter.io domain search (key-gated).
-  {
-    const h = await hunterLeg(company, domain);
-    errors.push(...h.errors);
-    for (const n of h.names) {
-      if (!contacts.some((c) => c.name === n)) {
-        for (const c of contacts) {
-          if (!c.name) { c.name = n; break; }
-        }
-      }
-    }
-    for (const c of h.contacts) {
-      const k = digest(c);
-      if (!seen.has(k)) seen.set(k, c);
-    }
-  }
-
-  // 4. Public LinkedIn search via the TinyFish CLI.
+  // 3. Public LinkedIn search via the TinyFish CLI.
   {
     const t = await tinyfishLeg(company, domain, city);
     errors.push(...t.errors);
@@ -729,7 +611,7 @@ export async function harvestContactsForCompany(
     }
   }
 
-  // 5. Verify any harvested email and record status.
+  // 4. Verify any harvested email and record status.
   {
     const uniqueEmails = dedupeStrings(
       contacts.map((c) => c.email).filter(Boolean),

@@ -345,7 +345,6 @@ if (!process.env.LEADJIN_ADMIN_SECRET) {
 if (startupWarnings > 0) console.warn(`[CONFIG] ${startupWarnings} env var(s) missing. Check your .env file.`);
 
 // Waterfall Enrichment Providers (optional — add API keys to enable)
-// HUNTER_API_KEY - Hunter.io email finder + verifier
 // APOLLO_API_KEY - Apollo.io people enrichment (email + phone)
 // SNOV_API_KEY + SNOV_API_SECRET - Snov.io email finder
 
