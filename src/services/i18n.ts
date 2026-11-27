@@ -15,6 +15,7 @@ export interface I18nService {
 // ---------------------------------------------------------------------------
 // Translation dictionaries
 // Natural Saudi/Gulf Arabic — professional but not stiff.
+// Coverage: en and ar expose the same dotted/nested key paths (parity audited 2026-11-28).
 // ---------------------------------------------------------------------------
 const dict: Record<Locale, Record<string, any>> = {
   en: {
@@ -241,6 +242,39 @@ const dict: Record<Locale, Record<string, any>> = {
 
     // Language toggle
     langToggle: 'AR',
+
+    // Autopilot (F9 UI keys — flat dotted keys, resolved by the exact-key path in t())
+    'autopilot.title': 'Autopilot',
+    'autopilot.subtitle': 'Goal, report, decisions and Jin status',
+    'autopilot.openAdvanced': 'Open advanced',
+    'autopilot.goal': 'Goal',
+    'autopilot.goalName': 'Name',
+    'autopilot.targetIndustry': 'Target industry',
+    'autopilot.geography': 'Geography',
+    'autopilot.cadence': 'Cadence',
+    'autopilot.dailyCap': 'Daily cap',
+    'autopilot.noGoal': 'No goal set',
+    'autopilot.todayReport': 'Today report',
+    'autopilot.produced': 'Produced',
+    'autopilot.errors': 'Errors',
+    'autopilot.engines': 'Engines',
+    'autopilot.noReport': 'No report yet today',
+    'autopilot.decisions': 'Decisions',
+    'autopilot.approve': 'Approve',
+    'autopilot.reject': 'Reject',
+    'autopilot.noDecisions': 'No pending decisions',
+    'autopilot.jinStatus': 'Jin status',
+    'autopilot.jinDetail': 'Provider and model',
+    'autopilot.connected': 'Connected',
+    'autopilot.disconnected': 'Disconnected',
+    'autopilot.jinProvider': 'Provider',
+    'autopilot.jinModel': 'Model',
+    'askjin.title': 'Ask Jin',
+    'askjin.inputLabel': 'Type a message',
+    'askjin.placeholder': 'Message Jin...',
+    'askjin.toggle': 'Toggle dock',
+    'askjin.noMessages': 'No messages yet',
+    'askjin.send': 'Send',
   },
 
   ar: {
@@ -467,6 +501,39 @@ const dict: Record<Locale, Record<string, any>> = {
 
     // Language toggle
     langToggle: 'EN',
+
+    // Autopilot (F9 UI keys — Arabic)
+    'autopilot.title': 'الوحدة الذكية',
+    'autopilot.subtitle': 'الهدف والتقرير والقرارات وحالة جين',
+    'autopilot.openAdvanced': 'فتح الواجهة المتقدمة',
+    'autopilot.goal': 'الهدف',
+    'autopilot.goalName': 'الاسم',
+    'autopilot.targetIndustry': 'القطاع المستهدف',
+    'autopilot.geography': 'المنطقة الجغرافية',
+    'autopilot.cadence': 'التكرار',
+    'autopilot.dailyCap': 'السعة اليومية',
+    'autopilot.noGoal': 'لا يوجد هدف محدد بعد',
+    'autopilot.todayReport': 'التقرير اليومي',
+    'autopilot.produced': 'المنتج',
+    'autopilot.errors': 'الأخطاء',
+    'autopilot.engines': 'المحركات',
+    'autopilot.noReport': 'لا يوجد تقرير حتى الآن',
+    'autopilot.decisions': 'القرارات',
+    'autopilot.approve': 'الموافقة',
+    'autopilot.reject': 'الرفض',
+    'autopilot.noDecisions': 'لا توجد قرارات معلقة',
+    'autopilot.jinStatus': 'حالة جين',
+    'autopilot.jinDetail': 'المزود والنموذج',
+    'autopilot.connected': 'متصل',
+    'autopilot.disconnected': 'غير متصل',
+    'autopilot.jinProvider': 'المزود',
+    'autopilot.jinModel': 'النموذج',
+    'askjin.title': 'اسأل جين',
+    'askjin.inputLabel': 'اكتب رسالتك',
+    'askjin.placeholder': 'اكتب رسالتك...',
+    'askjin.toggle': 'تبديل الإطار',
+    'askjin.noMessages': 'لا توجد رسائل بعد',
+    'askjin.send': 'إرسال',
   },
 };
 
@@ -496,6 +563,8 @@ export const i18n: I18nService = {
   },
   t(key: string): string {
     const d = dict[_locale] || dict.en;
+    // Flat dotted keys from the Autopilot lanes are stored verbatim.
+    if (typeof d[key] === 'string') return d[key];
     // Support dot-notation for nested keys like "stages.NEW"
     const parts = key.split('.');
     let val: any = d;
