@@ -23,7 +23,6 @@ services:
 
       # === API credentials (injected from host env / .env file) ===
       GEMINI_API_KEY:     ${GEMINI_API_KEY}
-      HUNTER_API_KEY:     ${HUNTER_API_KEY}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
 
       # === LeadJin identity ===
