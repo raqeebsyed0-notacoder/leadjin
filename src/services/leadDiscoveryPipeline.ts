@@ -24,7 +24,7 @@ import { discoverCompaniesViaPlaces } from "./huntOrchestrator.js";
 import { fetchWathqLead } from "./wathqService.js";
 import { generateLeadjinLeads } from "./geminiService.js";
 import { engineAvailability, runLegacyEngine, type LegacyEngine } from "./legacyEngines.js";
-import { harvestContactsForCompany } from "./contactHarvest.js";
+import { harvestContactsForCompany, type HarvestedContact } from "./contactHarvest.js";
 
 /** Stage codes (also the source_engine tag). */
 export const STAGE_CACHE = "cache";
@@ -268,8 +268,7 @@ async function runLeadDiscoveryInner(
     }
     errors.push(...result.errors);
     for (const contact of result.contacts) {
-      const key = existingLeadKey(row, ci.domain); // placeholder — recomputed per contact below
-      // Recompute per contact (existingLeadKey above used stale row); use a dedicated key.
+      // Recompute the key per contact.
       const cEmail = (contact.email || "").toLowerCase().trim();
       const cLinkedin = (contact.linkedin || "").toLowerCase().trim();
       const cName = normalizeName(contact.name);
