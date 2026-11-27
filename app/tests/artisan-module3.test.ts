@@ -3,7 +3,7 @@ import request from 'supertest';
 import { getSharedToken } from './shared-auth';
 import { HAS_AI_KEY } from './provider-availability';
 
-const API_URL = 'http://localhost:3001';
+const API_URL = process.env.API_URL || 'http://localhost:3001';
 // AI-backed endpoints fail closed with 503 when no Gemini key is configured.
 
 describe('Artisan Module 3 — Vision Strategist', () => {

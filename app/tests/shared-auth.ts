@@ -2,7 +2,7 @@ import request from 'supertest';
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 
-const API_URL = 'http://localhost:3001';
+const API_URL = process.env.API_URL || 'http://localhost:3001';
 const cachePath = resolve(__dirname, '.auth-cache.json');
 
 export function getSharedToken(): string {

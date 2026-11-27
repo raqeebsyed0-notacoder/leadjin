@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import { getSharedToken } from './shared-auth';
 
-const API_URL = 'http://localhost:3001';
+const API_URL = process.env.API_URL || 'http://localhost:3001';
 
 describe('Artisan Module 5 — CRM Intelligence Hub', () => {
   let token: string;
