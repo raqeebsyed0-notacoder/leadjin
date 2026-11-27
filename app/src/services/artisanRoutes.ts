@@ -8,7 +8,7 @@
 
 import { Router, Request, Response } from 'express';
 import Database from 'better-sqlite3';
-import { assertSendable } from './suppressionGate.js';
+import { assertSendable } from './suppressionGate.js'; import { assertSendAllowed } from './pdplGate.js';
 import {
   generateOutreach,
   OutreachLead,
@@ -209,7 +209,7 @@ export function createArtisanRouter(
         return res.status(403).json({ error: 'Address is suppressed', reason: gate.reason });
       }
     }
-
+    const pdpl = assertSendAllowed(db, String(lead_id), 'email'); if (!pdpl.allowed) return res.status(403).json({ error: 'Send not permitted', reason: ('reason' in pdpl ? pdpl.reason : 'send_not_permitted') }); // PDPL consent gate (F7): every insert sits behind this check.
     try {
       const result = db.prepare(
         `INSERT INTO outreach_messages (lead_id, user_id, message_type, subject, body, language, status, sent_at)

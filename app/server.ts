@@ -33,6 +33,14 @@ import { createCompleteJinRouter } from './src/services/jinCompleteRoutes.js';
 import { createJinHuntStreamRouter } from './src/services/jinHuntStream.js';
 import { createArtisanRouter } from './src/services/artisanRoutes.js';
 import { assertSendable, ensureSuppressionSchema, suppress } from './src/services/suppressionGate.js';
+// Autopilot v1 producers (wiring lane). All routes below use the existing requireAuth helper.
+import { assertSendAllowed, ensureConsentSchema, recordBasis, withdrawConsent, sendSiteInventory } from './src/services/pdplGate.js';
+import { ensureAutopilotRunsSchema, ensureDecisionInboxSchema, startRun, finishRun, listRuns, pendingDecisions, resolveDecision } from './src/services/runHistory.js';
+import { recordDelegatedRun, tickScheduler, validateGoal } from './src/services/autopilotLoop.js';
+import { describeBrainSlot } from './src/services/brainSlot.js';
+import { ensureSchema as ensureMemorySchema } from './src/services/memoryTiers.js';
+import { beginRunReport, recordStage, finishRunReport, summarise } from './src/services/observability.js';
+import { createInterview, nextQuestion, answer, buildCard, validateCard } from './src/services/companyInterview.js';
 import { huntExecutives } from './src/services/linkedinHunter.js';
 import { fetchWathqLead } from './src/services/wathqService.js';
 import { huntOrchestrate, type OrchestrateInput } from './src/services/huntOrchestrator.js';
@@ -977,6 +985,11 @@ db.exec(`
 
 // Email safety: hard email-keyed suppression table (blocks addresses with no lead row).
 ensureSuppressionSchema(db);
+// Autopilot v1 schema boot — idempotent CREATE TABLE IF NOT EXISTS, same DB handle.
+ensureConsentSchema(db);
+ensureAutopilotRunsSchema(db);
+ensureDecisionInboxSchema(db);
+ensureMemorySchema(db);
 
 // Initialize the Intelligence Hub only after the core tables exist. When this
 // ran before CREATE TABLE leads, every column migration logged "no such table:
@@ -3982,6 +3995,16 @@ async function processEmailQueue() {
       const sanitizedBody = sanitizeHtml(email.body);
       const bodyWithTracking = injectEmailTracking(sanitizedBody, email.id);
       const bodyWithFooter = addUnsubscribeFooter(bodyWithTracking, email.to_email);
+      // PDPL consent gate (F7): fail closed before the system-SMTP send site.
+      const pdpl = assertSendAllowed(db, String(email.lead_id || email.to_email || ''), 'email');
+      if (!pdpl.allowed) {
+        const pdplReason = 'reason' in pdpl ? pdpl.reason : 'send_not_permitted';
+        db.prepare("INSERT INTO email_events (email_queue_id, event_type, metadata) VALUES (?, 'pdpl_blocked', ?)").run(
+          email.id, JSON.stringify({ reason: pdplReason, path: 'system_smtp' })
+        );
+        db.prepare("UPDATE email_queue SET status = 'CANCELLED', last_error = ? WHERE id = ?").run(`pdpl:${pdplReason}`, email.id);
+        continue;
+      }
       await transporter.sendMail({
         from: process.env.SMTP_FROM || '"LEADJIN" <outreach@leadjin.ai>',
         to: email.to_email,
@@ -4039,6 +4062,17 @@ async function processEmailQueue() {
           console.log(`[EmailWorker] Skipping email ${email.id} - Ramadan/Eid pause active`);
           continue; // Skip this email
         }
+      }
+
+      // PDPL consent gate (F7): covers both the Gmail OAuth and SMTP fallback branches below.
+      const pdpl = assertSendAllowed(db, String(email.lead_id || email.to_email || ''), 'email');
+      if (!pdpl.allowed) {
+        const pdplReason = 'reason' in pdpl ? pdpl.reason : 'send_not_permitted';
+        db.prepare("INSERT INTO email_events (email_queue_id, event_type, metadata) VALUES (?, 'pdpl_blocked', ?)").run(
+          email.id, JSON.stringify({ reason: pdplReason, path: 'user_queue' })
+        );
+        db.prepare("UPDATE email_queue SET status = 'CANCELLED', last_error = ? WHERE id = ?").run(`pdpl:${pdplReason}`, email.id);
+        continue;
       }
 
       // Update last_attempt_at only (attempt_count is incremented on failure)
@@ -7213,6 +7247,125 @@ console.log('[SequenceWorker] Email sequence processor started');
 
 // --- Vite Integration ---
 // --- Background Workers ---
+
+// ===========================================================================
+// Autopilot v1 — producer routes. Every route calls requireAuth itself,
+// matching the rest of this file (there is no global /api auth middleware).
+// ===========================================================================
+const interviewStates = new Map<string, ReturnType<typeof createInterview>>();
+
+// F7 — PDPL customer-is-controller gate.
+app.post('/api/pdpl/basis', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  ensureConsentSchema(db);
+  res.json(recordBasis(db, req.body));
+});
+app.post('/api/pdpl/withdraw', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const { contact_id, action } = req.body ?? {};
+  res.json(withdrawConsent(db, String(contact_id ?? ''), String(action ?? 'unspecified')));
+});
+app.get('/api/pdpl/check', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const { contact_id, channel } = req.query;
+  res.json(assertSendAllowed(db, String(contact_id ?? ''), String(channel ?? 'email')));
+});
+app.get('/api/pdpl/send-sites', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  res.json(sendSiteInventory(process.cwd()));
+});
+
+// F5 — Autopilot loop: scheduler, run history, decision inbox. Nothing executes in a tick.
+app.post('/api/autopilot/tick', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const checked = validateGoal(req.body);
+  if (!checked.ok) return res.status(400).json({ error: 'invalid_goal', reason: ('reason' in checked ? checked.reason : 'invalid_goal') });
+  const goal = checked.goal;
+  const result = tickScheduler(goal, new Date());
+  const run = startRun(db, goal.id);
+  const report = beginRunReport('autopilot-tick');
+  const delegated: string[] = [];
+  const skipped: string[] = [];
+  for (const job of result.jobs) {
+    if (job.due) {
+      const row = recordDelegatedRun(db, goal.id, job.job);
+      delegated.push(row.id);
+      recordStage(report, { stage: job.job, ok: true, engine: 'delegated', ms: 0, cost_usd: 0 });
+    } else {
+      skipped.push(`${job.job}:${job.reason ?? 'not_due'}`);
+      recordStage(report, { stage: job.job, ok: false, engine: 'scheduler', ms: 0, cost_usd: 0, reason: job.reason ?? 'not_due' });
+    }
+  }
+  const runReport = finishRunReport(report);
+  finishRun(db, run.id, {
+    status: 'finished', produced: delegated.length, engines_used: 'scheduler',
+    errors: skipped.join('; '), cost_usd: runReport.cost_usd, latency_ms: runReport.latency_ms,
+  });
+  res.json({ goal_id: result.goal_id, tick_bucket: result.tick_bucket, delegated, report: runReport, totals: summarise([runReport]) });
+});
+app.get('/api/autopilot/decisions', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const goalId = String(req.query.goal_id ?? '');
+  res.json(pendingDecisions(db, goalId || undefined));
+});
+app.post('/api/autopilot/decisions/resolve', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const { id, choice } = req.body ?? {};
+  res.json(resolveDecision(db, String(id ?? ''), String(choice ?? '')));
+});
+app.get('/api/autopilot/runs', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const goalId = String(req.query.goal_id ?? '');
+  const limit = Number(req.query.limit ?? 50);
+  res.json(listRuns(db, goalId, Number.isFinite(limit) ? limit : 50));
+});
+
+// F3/F4 — safe brain-slot status (provider/model/base_url only, no key material).
+app.get('/api/autopilot/brain-slot', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  res.json(describeBrainSlot());
+});
+
+// F2 — five-question company interview, one question per call.
+app.post('/api/company/interview/start', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const mode = String(req.body?.mode ?? 'answers');
+  if (mode !== 'answers' && mode !== 'website' && mode !== 'cr') {
+    return res.status(400).json({ error: 'invalid_mode' });
+  }
+  const state = createInterview({ mode, website: req.body?.website ?? null, cr: req.body?.cr ?? null, company: req.body?.company ?? null });
+  interviewStates.set(String(user.id), state);
+  res.json({ state, next: nextQuestion(state) });
+});
+app.post('/api/company/interview/answer', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const state = interviewStates.get(String(user.id));
+  if (!state) return res.status(404).json({ error: 'interview_not_started' });
+  const { field, value, source } = req.body ?? {};
+  answer(state, field, String(value ?? ''), source ?? 'stated');
+  res.json({ state, next: nextQuestion(state) });
+});
+app.post('/api/company/interview/card', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const state = interviewStates.get(String(user.id));
+  if (!state) return res.status(404).json({ error: 'interview_not_started' });
+  const card = buildCard(state.answers, state.sources);
+  if (!validateCard(card)) return res.status(422).json({ error: 'card_has_unsourced_field' });
+  res.json({ card });
+});
+
 
 async function startServer() {
   const isDev = process.env.NODE_ENV !== 'production';

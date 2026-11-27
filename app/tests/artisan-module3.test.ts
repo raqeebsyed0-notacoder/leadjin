@@ -29,6 +29,19 @@ describe('Artisan Module 3 — Vision Strategist', () => {
           email_source: 'test'
         }]
       });
+    // PDPL: the send path refuses a contact with no recorded basis. This suite
+    // owns the contact it just created, so it records the basis first.
+    await request(API_URL)
+      .post('/api/pdpl/basis')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        contact_id: testLeadId,
+        basis: 'given',
+        consent_at: new Date().toISOString(),
+        evidence_ref: 'tests/artisan-module3.test.ts',
+        sender_identity: 'LeadJin QA suite',
+        arabic_notice: 'موافقة مسجلة لاختبار المنتج'
+      });
   });
 
   // Test 3.1: Templates without auth

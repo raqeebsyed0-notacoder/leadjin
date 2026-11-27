@@ -9,6 +9,9 @@ import { landingTranslations } from './landing/landingTranslations';
 import { JinEmployeeDashboard } from './components/JinEmployeeDashboard';
 import { JinWorkingPane } from './components/JinWorkingPane';
 import { CampaignBoard } from './components/CampaignBoard';
+// Autopilot v1 (wiring lane): default home view + persistent Ask Jin dock.
+import { AutopilotHome } from './components/autopilot/AutopilotHome';
+import { AskJinDock, type AskJinMessage } from './components/autopilot/AskJinDock';
 // Task 2G: Lazy load LandingPage for performance
 const LandingPage = lazy(() => import('./landing/LandingPage').then(m => ({ default: m.LandingPage })));
 
@@ -98,6 +101,7 @@ import {
   Copy,
   Edit2,
   Building2,
+  Cpu,
   UploadCloud,
   FileCheck2
 } from 'lucide-react';
@@ -1071,7 +1075,9 @@ function AppContent() {
   const [authInitialMode, setAuthInitialMode] = useState<AuthMode>('login');
   const [authResetToken, setAuthResetToken] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [currentView, setCurrentView] = useState<'harvest' | 'crm' | 'analytics' | 'settings'>('harvest');
+  const [currentView, setCurrentView] = useState<'autopilot' | 'harvest' | 'crm' | 'analytics' | 'settings'>('autopilot');
+  const [askJinOpen, setAskJinOpen] = useState(true);
+  const [askJinMessages, setAskJinMessages] = useState<AskJinMessage[]>([]);
   const [crmLeads, setCrmLeads] = useState<any[]>([]);
   const [analyticsData, setAnalyticsData] = useState<any>(null);
   const [analyticsDateRange, setAnalyticsDateRange] = useState<'7' | '30' | '90' | 'all'>('30');
@@ -2443,6 +2449,13 @@ function AppContent() {
 
               <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto custom-scrollbar">
                 <p className="px-4 text-[10px] font-bold uppercase tracking-[0.3em] opacity-20 mb-4 hidden lg:block">{language === 'ar' ? 'القائمة الرئيسية' : 'Main Menu'}</p>
+                <button
+                  onClick={() => setCurrentView('harvest')}
+                  className={`w-full flex items-center justify-start md:justify-center lg:justify-start gap-4 p-4 rounded-2xl transition-all ${currentView === 'harvest' || currentView === 'crm' || currentView === 'analytics' || currentView === 'settings' ? 'bg-app-accent text-app-bg shadow-lg shadow-app-accent/20' : 'opacity-40 hover:opacity-100 hover:bg-app-accent/5'}`}
+                >
+                  <Cpu size={20} className="shrink-0" />
+                  <span className="md:hidden lg:block text-xs font-bold uppercase tracking-widest text-left">{language === 'ar' ? 'متقدم' : 'Advanced'}</span>
+                </button>
                 <button 
                   onClick={() => {
                     setCurrentView('harvest');
@@ -2586,6 +2599,24 @@ function AppContent() {
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden relative custom-scrollbar">
           <div className="max-w-[1600px] mx-auto w-full">
+            {currentView === 'autopilot' && (
+              <AutopilotHome
+                goal={{ id: 'default', name: 'Lead generation', target_industry: targetIndustry, geography, cadence: 'daily', daily_cap: limit, status: 'active' }}
+                todayReport={{ produced: leads.length, errors: 0, engines_used: [] }}
+                decisions={[]}
+                jinStatus={{ connected: Boolean(authToken), provider: '', model: '', status: Boolean(authToken) ? 'connected' : 'disconnected' }}
+                onResolveDecision={(id, choice) => {
+                  fetch('/api/autopilot/decisions/resolve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken || ''}` },
+                    body: JSON.stringify({ id, choice }),
+                  })
+                    .then(() => setNotification({ message: `Decision ${choice}d`, type: 'success' }))
+                    .catch(() => setNotification({ message: 'Decision update failed', type: 'error' }));
+                }}
+                onOpenAdvanced={() => setCurrentView('harvest')}
+              />
+            )}
             {currentView === 'harvest' && (
               <div className="flex-1 flex flex-col">
                 {showConfig ? (
@@ -5165,6 +5196,15 @@ function AppContent() {
           localStorage.removeItem('leadjin_contacted');
           setNotification({ message: mode === 'register' ? 'Account created!' : 'Signed in successfully.', type: 'success' });
         }}
+      />
+
+      {/* Autopilot v1: persistent Ask Jin dock */}
+      <AskJinDock
+        open={askJinOpen}
+        messages={askJinMessages}
+        busy={false}
+        onToggle={() => setAskJinOpen(!askJinOpen)}
+        onSend={(text) => setAskJinMessages(messages => [...messages, { id: String(Date.now()), role: 'user', text, at: new Date().toISOString() }])}
       />
 
       {/* Notification Toast */}
