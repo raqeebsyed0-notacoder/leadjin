@@ -115,7 +115,8 @@ export function insertDecision(
   return getDecision(db, id)!;
 }
 
-function getRun(db: Database.Database, id: string): AutopilotRunRow | undefined {
+/** Look up one stored run by id; undefined when no such row exists. */
+export function getRun(db: Database.Database, id: string): AutopilotRunRow | undefined {
   return db.prepare('SELECT * FROM autopilot_runs WHERE id = ?').get(id) as
     | AutopilotRunRow
     | undefined;

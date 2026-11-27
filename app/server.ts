@@ -35,7 +35,7 @@ import { createArtisanRouter } from './src/services/artisanRoutes.js';
 import { assertSendable, ensureSuppressionSchema, suppress } from './src/services/suppressionGate.js';
 // Autopilot v1 producers (wiring lane). All routes below use the existing requireAuth helper.
 import { assertSendAllowed, ensureConsentSchema, recordBasis, withdrawConsent, sendSiteInventory } from './src/services/pdplGate.js';
-import { ensureAutopilotRunsSchema, ensureDecisionInboxSchema, startRun, finishRun, listRuns, pendingDecisions, resolveDecision } from './src/services/runHistory.js';
+import { ensureAutopilotRunsSchema, ensureDecisionInboxSchema, startRun, finishRun, listRuns, getRun, pendingDecisions, resolveDecision } from './src/services/runHistory.js';
 import { recordDelegatedRun, tickScheduler, validateGoal } from './src/services/autopilotLoop.js';
 import { describeBrainSlot } from './src/services/brainSlot.js';
 import { ensureSchema as ensureMemorySchema } from './src/services/memoryTiers.js';
@@ -7325,6 +7325,13 @@ app.get('/api/autopilot/runs', (req, res) => {
   const goalId = String(req.query.goal_id ?? '');
   const limit = Number(req.query.limit ?? 50);
   res.json(listRuns(db, goalId, Number.isFinite(limit) ? limit : 50));
+});
+app.get('/api/autopilot/runs/:id', (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const run = getRun(db, String(req.params.id ?? ''));
+  if (!run) return res.status(404).json({ error: 'run_not_found' });
+  res.json(run);
 });
 
 // F3/F4 — safe brain-slot status (provider/model/base_url only, no key material).
