@@ -11,6 +11,13 @@
 
 import dns from 'dns/promises';
 import net from 'net';
+import type Database from 'better-sqlite3';
+import {
+  overallStatus as computeOverallStatus,
+  recordVerification,
+  type StageVerdict,
+  type VerificationStatus,
+} from './verificationRecord.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,7 +37,16 @@ export interface SovereignVerificationResult {
   socialMatch: boolean;
   confidenceScore: number; // 0-100
   verificationLog: string[];
+  status: VerificationStatus;
+  stageResults: StageVerdict[];
 }
+
+type SmtpStageResult = {
+  ok: boolean;
+  status: VerificationStatus;
+  reason: string;
+  mxHost?: string;
+};
 
 // ---------------------------------------------------------------------------
 // Rate limiters (shared with emailVerifier patterns)
@@ -64,23 +80,23 @@ function isValidEmailSyntax(email: string): boolean {
   return /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(email.trim());
 }
 
-async function smtpVerifyMailbox(email: string, log: string[]): Promise<boolean> {
+async function smtpVerifyMailbox(email: string, log: string[]): Promise<SmtpStageResult> {
   const normalized = email.trim().toLowerCase();
   const domain = normalized.split('@')[1];
 
   if (!domain || domain.length < 4 || !domain.includes('.') || domain.endsWith('.')) {
     log.push(`[Email] Invalid domain: ${domain || 'missing'}`);
-    return false;
+    return { ok: false, status: 'invalid', reason: 'email_domain_invalid' };
   }
 
   if (!isValidEmailSyntax(normalized)) {
     log.push(`[Email] Syntax check failed for ${normalized}`);
-    return false;
+    return { ok: false, status: 'invalid', reason: 'email_syntax_invalid' };
   }
 
   if (!canProbe(smtpProbeTimestamps, MAX_SMTP_PROBES_PER_MINUTE)) {
     log.push(`[Email] SMTP rate limit hit — skipping probe for ${normalized}`);
-    return false;
+    return { ok: false, status: 'unverified', reason: 'smtp_rate_limited' };
   }
 
   recordProbe(smtpProbeTimestamps);
@@ -90,29 +106,29 @@ async function smtpVerifyMailbox(email: string, log: string[]): Promise<boolean>
     const mxRecords = await dns.resolveMx(domain);
     if (!mxRecords || mxRecords.length === 0) {
       log.push(`[Email] No MX records found for ${domain}`);
-      return false;
+      return { ok: false, status: 'unverified', reason: 'no_mx_records' };
     }
     mxRecords.sort((a, b) => a.priority - b.priority);
     const mxHost = mxRecords[0].exchange;
     log.push(`[Email] MX resolved: ${mxHost} (priority ${mxRecords[0].priority})`);
 
-    return await new Promise<boolean>((resolve) => {
+    return await new Promise<SmtpStageResult>((resolve) => {
       const socket = net.createConnection(25, mxHost);
       let stage = 0;
       let resolved = false;
 
-      const done = (result: boolean, reason: string) => {
+      const done = (verdict: SmtpStageResult) => {
         if (!resolved) {
           resolved = true;
           socket.destroy();
-          log.push(`[Email] SMTP result: ${result ? 'ACCEPTED' : 'REJECTED'} — ${reason}`);
-          resolve(result);
+          log.push(`[Email] SMTP result: ${verdict.status} — ${verdict.reason}`);
+          resolve(verdict);
         }
       };
 
       socket.setTimeout(8000);
-      socket.on('timeout', () => done(false, 'Connection timeout'));
-      socket.on('error', (err) => done(false, `Connection error: ${err.message}`));
+      socket.on('timeout', () => done({ ok: false, status: 'unverified', reason: 'smtp_timeout' }));
+      socket.on('error', (err) => done({ ok: false, status: 'unverified', reason: `smtp_error: ${err.message}` }));
 
       socket.on('data', (data: Buffer) => {
         const lines = data.toString().split('\r\n').filter(l => l.trim());
@@ -129,7 +145,17 @@ async function smtpVerifyMailbox(email: string, log: string[]): Promise<boolean>
           } else if (stage === 3) {
             const code = parseInt(line.slice(0, 3), 10);
             if (!isNaN(code)) {
-              done(code === 250 || code === 251, `SMTP code ${code}`);
+              if (code === 250) {
+                done({ ok: true, status: 'verified', reason: 'smtp_rcpt_250_accepted', mxHost });
+              } else if (code === 251) {
+                done({ ok: false, status: 'catch_all', reason: 'smtp_rcpt_forwarded_251', mxHost });
+              } else if ([550, 551, 552].includes(code)) {
+                done({ ok: false, status: 'invalid', reason: 'smtp_recipient_rejected', mxHost });
+              } else if (code >= 400 && code < 500) {
+                done({ ok: false, status: 'risky', reason: 'smtp_temporary_failure', mxHost });
+              } else {
+                done({ ok: false, status: 'unverified', reason: `smtp_code_${code}`, mxHost });
+              }
             }
           }
         }
@@ -137,7 +163,7 @@ async function smtpVerifyMailbox(email: string, log: string[]): Promise<boolean>
     });
   } catch (err: any) {
     log.push(`[Email] SMTP probe failed: ${err.message}`);
-    return false;
+    return { ok: false, status: 'unverified', reason: `smtp_probe_failed: ${err.message}` };
   }
 }
 
@@ -191,9 +217,8 @@ function validateSaudiPhone(phone: string, log: string[]): { valid: boolean; are
     return { valid: false, type: 'unknown' };
   }
 
-  // Check mobile prefixes (first digit of the 9)
-  const firstDigit = digits[0];
-  const mobilePrefix = '0' + firstDigit;
+  // Check mobile prefixes (first two digits of the 9, with the local leading 0)
+  const mobilePrefix = '0' + digits.slice(0, 2);
   if (SAUDI_MOBILE_PREFIXES.includes(mobilePrefix)) {
     log.push(`[Phone] Valid Saudi mobile: ${normalized} (prefix ${mobilePrefix})`);
     return { valid: true, type: 'mobile' };
@@ -217,26 +242,35 @@ function validateSaudiPhone(phone: string, log: string[]): { valid: boolean; are
   return { valid: false, type: 'unknown' };
 }
 
-async function hlrLookupStub(phone: string, log: string[]): Promise<{ status: string; carrier?: string }> {
-  // Real HLR lookup requires a paid API (e.g., Twilio Lookup, HLR Lookup API)
-  // For now we return a stub that marks the format as valid
-  log.push(`[Phone] HLR lookup stub for ${phone} — status: format_valid (real HLR requires API key)`);
-  return { status: 'format_valid' };
+type PhoneStageResult = { ok: boolean; status: VerificationStatus; reason: string };
+
+async function hlrLookupStub(phone: string, log: string[]): Promise<PhoneStageResult> {
+  // Real HLR lookup requires a paid API (Twilio Lookup / HLR Lookup API). No such
+  // provider is configured, so this stage must never report a positive result.
+  log.push(`[Phone] HLR lookup stub for ${phone} — status: unverified (hlr_lookup_not_configured)`);
+  return { ok: false, status: 'unverified', reason: 'hlr_lookup_not_configured' };
 }
 
 // ---------------------------------------------------------------------------
 // Social Cross-Reference — LinkedIn Public Page Match
 // ---------------------------------------------------------------------------
 
+type SocialStageResult = {
+  ok: boolean;
+  status: VerificationStatus;
+  reason: string;
+  source_url?: string;
+};
+
 async function crossReferenceLinkedIn(
   linkedinUrl: string,
   log: string[],
   expectedName?: string,
   expectedCompany?: string,
-): Promise<boolean> {
+): Promise<SocialStageResult> {
   if (!linkedinUrl || !linkedinUrl.includes('linkedin.com')) {
     log.push(`[Social] Invalid LinkedIn URL: ${linkedinUrl}`);
-    return false;
+    return { ok: false, status: 'invalid', reason: 'linkedin_url_invalid' };
   }
 
   log.push(`[Social] Fetching public LinkedIn page: ${linkedinUrl}`);
@@ -253,13 +287,12 @@ async function crossReferenceLinkedIn(
 
     if (!response.ok) {
       log.push(`[Social] LinkedIn fetch failed: HTTP ${response.status}`);
-      return false;
+      return { ok: false, status: 'unverified', reason: `linkedin_http_${response.status}`, source_url: linkedinUrl };
     }
 
     const html = await response.text();
 
     // LinkedIn public pages contain JSON-LD or og:title/meta tags
-    // Extract name from title or JSON-LD
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
     const ogTitleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
     const jsonLdMatch = html.match(/<script type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i);
@@ -285,10 +318,9 @@ async function crossReferenceLinkedIn(
       pageName = titleMatch[1].replace(' | LinkedIn', '').split(' - ')[0].trim();
     }
 
-    // Try to extract company from page text
     if (!pageCompany) {
       const companyMatch = html.match(/"companyName"["']?\s*:\s*["']([^"']+)["']/i) ||
-                           html.match(/at\s+([A-Z][A-Za-z0-9\s&]+)(?:\s*\||\s*-|\s*<|\s*$)/);
+                           html.match(/at\s+([A-Z][A-Za-z0-9\s&]+)(?:\s*\|\s*-|\s*<|\s*$)/);
       if (companyMatch) {
         pageCompany = companyMatch[1].trim();
       }
@@ -296,7 +328,6 @@ async function crossReferenceLinkedIn(
 
     log.push(`[Social] Extracted from page — name: "${pageName}", company: "${pageCompany}"`);
 
-    // Match logic
     let nameMatch = false;
     let companyMatch = false;
 
@@ -304,37 +335,31 @@ async function crossReferenceLinkedIn(
       const normExpected = expectedName.toLowerCase().replace(/[^a-z0-9\s]/g, '');
       const normPage = pageName.toLowerCase().replace(/[^a-z0-9\s]/g, '');
       nameMatch = normPage.includes(normExpected) || normExpected.includes(normPage);
-      if (nameMatch) {
-        log.push(`[Social] Name match confirmed: "${expectedName}" ↔ "${pageName}"`);
-      } else {
-        log.push(`[Social] Name mismatch: expected "${expectedName}", found "${pageName}"`);
-      }
-    } else if (!expectedName) {
-      log.push(`[Social] No expected name provided — skipping name match`);
-      nameMatch = true; // neutral when no expectation
     }
 
     if (expectedCompany && pageCompany) {
       const normExpected = expectedCompany.toLowerCase().replace(/[^a-z0-9\s]/g, '');
       const normPage = pageCompany.toLowerCase().replace(/[^a-z0-9\s]/g, '');
       companyMatch = normPage.includes(normExpected) || normExpected.includes(normPage);
-      if (companyMatch) {
-        log.push(`[Social] Company match confirmed: "${expectedCompany}" ↔ "${pageCompany}"`);
-      } else {
-        log.push(`[Social] Company mismatch: expected "${expectedCompany}", found "${pageCompany}"`);
-      }
-    } else if (!expectedCompany) {
-      log.push(`[Social] No expected company provided — skipping company match`);
-      companyMatch = true; // neutral when no expectation
     }
 
-    const overallMatch = nameMatch && companyMatch;
-    log.push(`[Social] Cross-reference result: ${overallMatch ? 'MATCH' : 'MISMATCH'}`);
-    return overallMatch;
+    const hasExpectation = !!expectedName || !!expectedCompany;
+    const overallMatch = hasExpectation && nameMatch && companyMatch;
+
+    if (overallMatch) {
+      log.push(`[Social] Cross-reference result: MATCH`);
+      return { ok: true, status: 'verified', reason: 'linkedin_name_company_match', source_url: linkedinUrl };
+    }
+    if (!hasExpectation) {
+      log.push(`[Social] No expected identity to compare — cannot verify`);
+      return { ok: false, status: 'unverified', reason: 'linkedin_no_expected_identity', source_url: linkedinUrl };
+    }
+    log.push(`[Social] Cross-reference result: MISMATCH`);
+    return { ok: false, status: 'invalid', reason: 'linkedin_identity_mismatch', source_url: linkedinUrl };
 
   } catch (err: any) {
     log.push(`[Social] Fetch error: ${err.message}`);
-    return false;
+    return { ok: false, status: 'unverified', reason: `linkedin_fetch_error: ${err.message}`, source_url: linkedinUrl };
   }
 }
 
@@ -398,7 +423,11 @@ function calculateConfidence(
 // Triple Verify — Main Entry Point
 // ---------------------------------------------------------------------------
 
-export async function tripleVerify(lead: LeadIdentity): Promise<SovereignVerificationResult> {
+export async function tripleVerify(
+  lead: LeadIdentity,
+  db?: Database.Database,
+  leadId: string = lead.email || lead.phone || lead.linkedinUrl || 'unknown'
+): Promise<SovereignVerificationResult> {
   const log: string[] = [];
   log.push(`[SovereignVerifier] Triple verification started at ${new Date().toISOString()}`);
 
@@ -414,49 +443,109 @@ export async function tripleVerify(lead: LeadIdentity): Promise<SovereignVerific
       socialMatch: false,
       confidenceScore: 0,
       verificationLog: log,
+      status: 'unverified',
+      stageResults: [],
     };
   }
 
-  // 1. Email verification
-  let emailValid = false;
-  if (lead.email) {
-    emailValid = await smtpVerifyMailbox(lead.email, log);
-  } else {
-    log.push(`[Email] No email provided — skipping`);
-  }
+  // 1. Email — real SMTP handshake only
+  const emailStage: SmtpStageResult = lead.email
+    ? await smtpVerifyMailbox(lead.email, log)
+    : { ok: false, status: 'unverified', reason: 'not_provided' };
+  if (!lead.email) log.push(`[Email] No email provided — skipping`);
 
-  // 2. Phone verification
-  let phoneValid = false;
+  // 2. Phone — format check is real, HLR lookup is a stub (never a positive)
+  let phoneStage: PhoneStageResult;
   if (lead.phone) {
     const phoneResult = validateSaudiPhone(lead.phone, log);
-    if (phoneResult.valid) {
-      await hlrLookupStub(lead.phone, log);
-      phoneValid = true;
-    }
+    phoneStage = phoneResult.valid
+      ? await hlrLookupStub(lead.phone, log)
+      : { ok: false, status: 'invalid', reason: 'phone_format_invalid' };
   } else {
     log.push(`[Phone] No phone provided — skipping`);
+    phoneStage = { ok: false, status: 'unverified', reason: 'not_provided' };
   }
 
-  // 3. Social cross-reference
-  let socialMatch = false;
-  if (lead.linkedinUrl) {
-    socialMatch = await crossReferenceLinkedIn(lead.linkedinUrl, log, lead.name, lead.company);
-  } else {
-    log.push(`[Social] No LinkedIn URL provided — skipping`);
-  }
+  // 3. Social — real public-page fetch, compared against an expected identity
+  const socialStage: SocialStageResult = lead.linkedinUrl
+    ? await crossReferenceLinkedIn(lead.linkedinUrl, log, lead.name, lead.company)
+    : { ok: false, status: 'unverified', reason: 'not_provided' };
+  if (!lead.linkedinUrl) log.push(`[Social] No LinkedIn URL provided — skipping`);
 
-  // 4. Confidence score
+  const stages: StageVerdict[] = [
+    {
+      stage: 'email_smtp',
+      status: emailStage.status,
+      reason: emailStage.reason,
+      method: 'SMTP_HANDSHAKE',
+      confidence: emailStage.status === 'verified' ? 95 : 0,
+      evidence: { mx_host: emailStage.mxHost ?? null },
+      source_url: emailStage.mxHost ? `smtp://${emailStage.mxHost}` : null,
+    },
+    {
+      stage: 'phone_hlr',
+      status: phoneStage.status,
+      reason: phoneStage.reason,
+      method: 'HLR_STYLE_LOOKUP',
+      confidence: 0,
+      evidence: {},
+    },
+    {
+      stage: 'linkedin_crossref',
+      status: socialStage.status,
+      reason: socialStage.reason,
+      method: 'LINKEDIN_PUBLIC_PAGE',
+      confidence: socialStage.status === 'verified' ? 90 : 0,
+      evidence: {},
+      source_url: socialStage.source_url ?? null,
+    },
+  ];
+
+  // Weakest conclusive stage wins; an unverified stub caps overall at partially_verified.
+  const verdictStatus = computeOverallStatus(stages);
+  const overall: { status: VerificationStatus; reason: string } =
+    verdictStatus === 'partially_verified'
+      ? { status: 'partially_verified', reason: 'weakest_stage_or_missing_provider' }
+      : verdictStatus === 'verified'
+        ? { status: 'verified', reason: 'all_stages_conclusive' }
+        : { status: verdictStatus, reason: 'weakest_conclusive_stage' };
+
+  const emailValid = emailStage.status === 'verified';
+  const phoneValid = phoneStage.status === 'verified';
+  const socialMatch = socialStage.status === 'verified';
   const confidenceScore = calculateConfidence(
-    emailValid,
-    phoneValid,
-    socialMatch,
-    hasEmail,
-    hasPhone,
-    hasLinkedIn,
-    log
+    emailValid, phoneValid, socialMatch, hasEmail, hasPhone, hasLinkedIn, log
   );
 
-  log.push(`[SovereignVerifier] Triple verification complete — email:${emailValid} phone:${phoneValid} social:${socialMatch} score:${confidenceScore}`);
+  // Persistent evidence on EVERY call; db is optional and never throws.
+  for (const s of stages) {
+    recordVerification(db, {
+      lead_id: leadId,
+      email: lead.email ?? null,
+      stage: s.stage,
+      method: s.method,
+      status: s.status,
+      confidence: s.confidence ?? 0,
+      evidence_json: s.evidence ?? {},
+      source_url: s.source_url ?? null,
+      reason: s.reason,
+    });
+  }
+  recordVerification(db, {
+    lead_id: leadId,
+    email: lead.email ?? null,
+    stage: 'overall',
+    method: 'WEAKEST_STAGE',
+    status: overall.status,
+    confidence: confidenceScore,
+    evidence_json: {
+      reason: overall.reason,
+      stages: stages.map(s => ({ stage: s.stage, status: s.status, reason: s.reason })),
+    },
+    reason: overall.reason,
+  });
+
+  log.push(`[SovereignVerifier] Triple verification complete — status:${overall.status} email:${emailValid} phone:${phoneValid} social:${socialMatch} score:${confidenceScore}`);
 
   return {
     emailValid,
@@ -464,6 +553,8 @@ export async function tripleVerify(lead: LeadIdentity): Promise<SovereignVerific
     socialMatch,
     confidenceScore,
     verificationLog: log,
+    status: overall.status,
+    stageResults: stages,
   };
 }
 

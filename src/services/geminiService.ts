@@ -21,6 +21,39 @@ function cleanJsonResponse(text: string): string {
   }
 }
 
+/**
+ * Pull the first balanced JSON array out of a model reply.
+ *
+ * Small local models (gemma4:e4b) wrap the array in prose, or emit a second
+ * object after it, which makes a whole-text jsonrepair fail. This scans for the
+ * first '[' and returns the slice up to its matching ']' (skipping brackets
+ * inside strings); if the array never closes (truncated output), it returns the
+ * remainder so jsonrepair can close it.
+ */
+function extractJsonArray(text: string): string | null {
+  const start = text.indexOf('[');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '[' || ch === '{') depth++;
+    else if (ch === ']' || ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return text.slice(start);
+}
+
 
 import { getGenAI } from './genaiClient.js';
 
@@ -242,7 +275,8 @@ Each object: {"lead_id":"string","name":"person name","title":"job title","compa
 
   const text = response.text || "";
   try {
-    let jsonStr = cleanJsonResponse(text);
+    const extracted = extractJsonArray(text);
+    let jsonStr = cleanJsonResponse(extracted ?? text);
 
     jsonStr = jsonrepair(jsonStr);
     let parsedLeads = JSON.parse(jsonStr);
