@@ -3,7 +3,7 @@ import request from 'supertest';
 import { getSharedToken } from './shared-auth';
 import { HAS_AI_KEY } from './provider-availability';
 
-const API_URL = 'http://localhost:3001';
+const API_URL = process.env.API_URL || 'http://localhost:3001';
 // AI-backed endpoints fail closed with 503 when no Gemini key is configured.
 
 describe('Artisan Module 3 — Vision Strategist', () => {
@@ -28,6 +28,19 @@ describe('Artisan Module 3 — Vision Strategist', () => {
           email_verified: 1,
           email_source: 'test'
         }]
+      });
+    // PDPL: the send path refuses a contact with no recorded basis. This suite
+    // owns the contact it just created, so it records the basis first.
+    await request(API_URL)
+      .post('/api/pdpl/basis')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        contact_id: testLeadId,
+        basis: 'given',
+        consent_at: new Date().toISOString(),
+        evidence_ref: 'tests/artisan-module3.test.ts',
+        sender_identity: 'LeadJin QA suite',
+        arabic_notice: 'موافقة مسجلة لاختبار المنتج'
       });
   });
 

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { getSharedCredentials, setSharedToken } from './shared-auth';
 
-const API_URL = 'http://localhost:3001';
+const API_URL = process.env.API_URL || 'http://localhost:3001';
 
 const testEmail = `auth_${Date.now()}_${Math.random().toString(36).slice(2)}@leadjin-test.com`;
 const testPassword = 'TestPassword123!';
