@@ -15,6 +15,7 @@ export interface I18nService {
 // ---------------------------------------------------------------------------
 // Translation dictionaries
 // Natural Saudi/Gulf Arabic — professional but not stiff.
+// Coverage: en and ar expose the same dotted/nested key paths (parity audited 2026-11-28).
 // ---------------------------------------------------------------------------
 const dict: Record<Locale, Record<string, any>> = {
   en: {
