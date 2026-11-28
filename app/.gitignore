@@ -37,3 +37,6 @@ __pycache__/
 
 # vite cache (test/build artifact)
 .vite/
+
+# test auth cache (contains a session token; never tracked)
+tests/.auth-cache.json
