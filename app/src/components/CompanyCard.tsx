@@ -16,6 +16,7 @@ import type {
   FieldKey,
   SourceTag,
 } from '../services/companyInterview.js';
+import { i18n } from '../services/i18n';
 
 /** Ordered metadata describing each field rendered on the card. */
 interface FieldDef {
@@ -24,14 +25,14 @@ interface FieldDef {
 }
 
 const FIELD_DEFS: readonly FieldDef[] = [
-  { key: 'company', label: 'Company' },
-  { key: 'cr', label: 'CR number' },
-  { key: 'website', label: 'Website' },
-  { key: 'sector', label: 'Sector' },
-  { key: 'city', label: 'City' },
-  { key: 'size', label: 'Size' },
-  { key: 'sells', label: 'What they sell' },
-  { key: 'sells_to', label: 'Who they sell to' },
+  { key: 'company', label: 'company' },
+  { key: 'cr', label: 'companyCrNumber' },
+  { key: 'website', label: 'website' },
+  { key: 'sector', label: 'companySector' },
+  { key: 'city', label: 'companyCity' },
+  { key: 'size', label: 'companySizeLabel' },
+  { key: 'sells', label: 'companySells' },
+  { key: 'sells_to', label: 'companySellsTo' },
 ];
 
 interface CompanyCardProps {
@@ -59,13 +60,20 @@ function badgeClasses(tag: SourceTag): string {
   }
 }
 
+const SOURCE_KEYS: Record<SourceTag, string> = {
+  stated: 'sourceStated',
+  website: 'sourceWebsite',
+  cr: 'sourceCr',
+  inferred: 'sourceInferred',
+};
+
 /** Small inline badge describing where a field's value came from. */
 function SourceBadge({ tag }: { tag: SourceTag }) {
   return (
     <span
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeClasses(tag)}`}
     >
-      {tag}
+      {i18n.t(SOURCE_KEYS[tag])}
     </span>
   );
 }
@@ -79,9 +87,9 @@ export const CompanyCard: React.FC<CompanyCardProps> = ({
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-5">
       <header className="mb-4">
-        <h2 className="text-lg font-semibold text-zinc-900">Company card</h2>
+        <h2 className="text-lg font-semibold text-zinc-900">{i18n.t('companyCardTitle')}</h2>
         <p className="text-sm text-zinc-500">
-          Every field below shows where its value came from; edit any value.
+          {i18n.t('companyCardHelp')}
         </p>
       </header>
 
@@ -89,7 +97,7 @@ export const CompanyCard: React.FC<CompanyCardProps> = ({
         {FIELD_DEFS.map((def) => (
           <div key={def.key} className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <dt className="text-sm font-medium text-zinc-900">{def.label}</dt>
+              <dt className="text-sm font-medium text-zinc-900">{i18n.t(def.label)}</dt>
               <dd className="mt-0.5 text-sm text-zinc-600">
                 {card[def.key] ?? '—'}
               </dd>
@@ -100,7 +108,7 @@ export const CompanyCard: React.FC<CompanyCardProps> = ({
                 type="button"
                 onClick={() => onEdit(def.key, card[def.key] ?? '')}
                 className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
-                aria-label={`Edit ${def.label}`}
+                aria-label={`${i18n.t('edit')} ${i18n.t(def.label)}`}
               >
                 <svg
                   className="h-4 w-4"

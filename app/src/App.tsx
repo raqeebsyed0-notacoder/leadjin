@@ -1080,7 +1080,7 @@ function AppContent() {
   const [authResetToken, setAuthResetToken] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [currentView, setCurrentView] = useState<'autopilot' | 'harvest' | 'crm' | 'analytics' | 'settings'>('autopilot');
-  const [askJinOpen, setAskJinOpen] = useState(true);
+  const [askJinOpen, setAskJinOpen] = useState(false);
   const [askJinMessages, setAskJinMessages] = useState<AskJinMessage[]>([]);
   const [crmLeads, setCrmLeads] = useState<any[]>([]);
   const [analyticsData, setAnalyticsData] = useState<any>(null);

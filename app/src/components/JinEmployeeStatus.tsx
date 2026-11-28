@@ -27,6 +27,7 @@ import {
   TrendingUp,
   Briefcase
 } from 'lucide-react';
+import { i18n } from '../services/i18n';
 
 interface JinWorkLogEntry {
   timestamp: string;
@@ -157,7 +158,7 @@ export const JinEmployeeStatus: React.FC<JinEmployeeStatusProps> = ({
         setCompanyInput('');
       } else {
         const error = await response.json();
-        alert(error.error || 'Failed to start extraction');
+        alert(error.error || i18n.t('jinExtractionFailed'));
         setIsExtracting(false);
       }
     } catch (error) {
@@ -234,7 +235,7 @@ export const JinEmployeeStatus: React.FC<JinEmployeeStatusProps> = ({
                   </div>
                   <div>
                     <h3 className="font-semibold">Jin</h3>
-                    <p className="text-xs text-white/70">Regional Intelligence Specialist</p>
+                    <p className="text-xs text-white/70">{i18n.t('jinRole')}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -251,7 +252,7 @@ export const JinEmployeeStatus: React.FC<JinEmployeeStatusProps> = ({
               {/* Current Status */}
               {status?.employee.currentTasks && status.employee.currentTasks.length > 0 && (
                 <div className="mt-3 p-3 bg-white/10 rounded-xl">
-                  <p className="text-xs text-white/70 mb-1">Currently working on:</p>
+                  <p className="text-xs text-white/70 mb-1">{i18n.t('jinCurrentlyWorking')}</p>
                   {status.employee.currentTasks.map((task) => (
                     <div key={task.jobId} className="flex items-center gap-2 text-sm">
                       <Loader2 className="w-3 h-3 animate-spin" />
@@ -270,19 +271,19 @@ export const JinEmployeeStatus: React.FC<JinEmployeeStatusProps> = ({
                   <p className="text-lg font-semibold text-zinc-900 dark:text-white">
                     {status.metrics.totalExtractions}
                   </p>
-                  <p className="text-xs text-zinc-500">Extractions</p>
+                  <p className="text-xs text-zinc-500">{i18n.t('jinExtractions')}</p>
                 </div>
                 <div className="p-3 bg-white dark:bg-zinc-900 text-center">
                   <p className="text-lg font-semibold text-zinc-900 dark:text-white">
                     {status.metrics.stakeholdersFound}
                   </p>
-                  <p className="text-xs text-zinc-500">Found</p>
+                  <p className="text-xs text-zinc-500">{i18n.t('jinFound')}</p>
                 </div>
                 <div className="p-3 bg-white dark:bg-zinc-900 text-center">
                   <p className="text-lg font-semibold text-emerald-600">
                     {status.metrics.verifiedContacts}
                   </p>
-                  <p className="text-xs text-zinc-500">Verified</p>
+                  <p className="text-xs text-zinc-500">{i18n.t('verified')}</p>
                 </div>
               </div>
             )}
@@ -290,14 +291,14 @@ export const JinEmployeeStatus: React.FC<JinEmployeeStatusProps> = ({
             {/* Quick Extract */}
             <div className="p-4 border-b border-zinc-200 dark:border-zinc-800">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-3">
-                Quick Extraction
+                {i18n.t('jinQuickExtraction')}
               </h4>
               <div className="space-y-2">
                 <div className="relative">
                   <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                   <input
                     type="text"
-                    placeholder="Company domain (e.g., aramco.com)"
+                    placeholder={i18n.t('jinDomainPlaceholder')}
                     value={domainInput}
                     onChange={(e) => setDomainInput(e.target.value)}
                     disabled={isExtracting}
@@ -308,7 +309,7 @@ export const JinEmployeeStatus: React.FC<JinEmployeeStatusProps> = ({
                   <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                   <input
                     type="text"
-                    placeholder="Company name (optional)"
+                    placeholder={i18n.t('jinCompanyPlaceholder')}
                     value={companyInput}
                     onChange={(e) => setCompanyInput(e.target.value)}
                     disabled={isExtracting}
@@ -323,12 +324,12 @@ export const JinEmployeeStatus: React.FC<JinEmployeeStatusProps> = ({
                   {isExtracting ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Extracting...
+                      {i18n.t('jinExtracting')}
                     </>
                   ) : (
                     <>
                       <Search className="w-4 h-4" />
-                      Find Stakeholders
+                      {i18n.t('jinFindStakeholders')}
                     </>
                   )}
                 </button>
@@ -339,7 +340,7 @@ export const JinEmployeeStatus: React.FC<JinEmployeeStatusProps> = ({
             <div className="max-h-64 overflow-y-auto">
               <div className="sticky top-0 bg-white dark:bg-zinc-900 p-3 border-b border-zinc-200 dark:border-zinc-800">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                  Recent Activity
+                  {i18n.t('jinRecentActivity')}
                 </h4>
               </div>
               <div className="p-3 space-y-2">
@@ -366,7 +367,7 @@ export const JinEmployeeStatus: React.FC<JinEmployeeStatusProps> = ({
                   ))
                 ) : (
                   <p className="text-xs text-zinc-400 text-center py-4">
-                    No recent activity
+                    {i18n.t('jinNoActivity')}
                   </p>
                 )}
               </div>
@@ -375,7 +376,7 @@ export const JinEmployeeStatus: React.FC<JinEmployeeStatusProps> = ({
             {/* Footer */}
             <div className="p-3 bg-zinc-50 dark:bg-zinc-800/50 border-t border-zinc-200 dark:border-zinc-800">
               <p className="text-xs text-zinc-400 text-center">
-                Jin uses Gemini 1.5 Pro for regional intelligence
+                {i18n.t('jinFooter')}
               </p>
             </div>
           </motion.div>

@@ -4,6 +4,7 @@
  */
 
 import React from 'react';
+import { i18n } from '../services/i18n';
 
 interface Props {
   children: React.ReactNode;
@@ -33,7 +34,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-10 text-center">
-          <h1 className="text-4xl font-bold mb-4">Something went wrong.</h1>
+          <h1 className="text-4xl font-bold mb-4">{i18n.t('errorSomethingWrong')}</h1>
           <pre className="bg-zinc-900 p-6 rounded-xl text-left overflow-auto max-w-full text-xs text-red-400 border border-red-900/50">
             {this.state.error?.toString()}
           </pre>
@@ -41,7 +42,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
             onClick={() => window.location.reload()}
             className="mt-8 px-8 py-3 bg-white text-black rounded-full font-bold uppercase tracking-widest text-xs"
           >
-            Reload Application
+            {i18n.t('errorReloadApp')}
           </button>
         </div>
       );

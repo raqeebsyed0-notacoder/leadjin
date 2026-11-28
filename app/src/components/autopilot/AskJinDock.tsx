@@ -45,6 +45,18 @@ export const AskJinDock: React.FC<AskJinDockProps> = ({
   };
 
   return (
+    <>
+      {!open && (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={t('askjin.title')}
+          className="fixed bottom-4 end-4 z-50 flex items-center gap-2 rounded-full bg-app-accent px-4 py-3 text-xs font-bold text-app-on-accent shadow-lg transition-transform hover:scale-105"
+        >
+          <Bot size={16} />
+          <span>{t('askjin.title')}</span>
+        </button>
+      )}
     <div
       className={`fixed bottom-4 end-4 z-50 flex flex-col gap-3 ${
         open ? 'flex' : 'hidden'
@@ -113,5 +125,6 @@ export const AskJinDock: React.FC<AskJinDockProps> = ({
         </form>
       </div>
     </div>
+    </>
   );
 };

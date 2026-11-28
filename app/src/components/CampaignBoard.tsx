@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   AlertCircle, Building2, LayoutDashboard, Loader2, RefreshCw, Target, X
 } from 'lucide-react';
+import { i18n } from '../services/i18n';
 
 export interface CampaignBoardProps {
   authToken: string;
@@ -60,7 +61,7 @@ const Unavailable = () => (
     data-unavailable="true"
     className="inline-flex items-center rounded-md border border-dashed border-app-border/60 px-2 py-0.5 text-[10px] italic text-app-text/40"
   >
-    Unavailable
+    {i18n.t('boardUnavailable')}
   </span>
 );
 
@@ -104,7 +105,7 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || `Board request failed (${res.status})`);
+        throw new Error(body?.error || `${i18n.t('boardRequestFailed')} (${res.status})`);
       }
       const data: BoardResponse = await res.json();
       if (signal?.aborted) return;
@@ -114,7 +115,7 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
     } catch (err) {
       if (signal?.aborted) return;
       setLeads([]);
-      setError(err instanceof Error ? err.message : 'Unable to load the campaign board');
+      setError(err instanceof Error ? err.message : i18n.t('boardLoadFailed'));
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
@@ -136,11 +137,11 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
       <button
         type="button"
         onClick={toggle}
-        aria-label="Open campaign board"
+        aria-label={i18n.t('boardOpenLabel')}
         className="fixed bottom-4 left-4 z-40 inline-flex items-center gap-2 rounded-full border border-app-border/60 glass px-4 py-2.5 text-xs font-semibold text-app-text shadow-lg transition-all hover:border-app-accent/50"
       >
         <Target size={15} className="text-app-accent" />
-        <span>Campaign board</span>
+        <span>{i18n.t('boardTitle')}</span>
         {!isMissing(leadCount) && (
           <span className="rounded-full bg-app-accent/10 px-2 py-0.5 font-mono text-[10px] text-app-accent">
             {leadCount}
@@ -153,7 +154,7 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
   return (
     <section
       dir="ltr"
-      aria-label="Campaign board"
+      aria-label={i18n.t('boardTitle')}
       className="fixed inset-3 z-50 flex flex-col overflow-hidden rounded-2xl border border-app-border/80 bg-[#0f0f14] shadow-2xl md:inset-6"
     >
       <header className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-app-border/40 px-4 py-3">
@@ -162,15 +163,15 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
             <LayoutDashboard size={16} />
           </span>
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-bold text-app-text">Campaign board</h2>
+            <h2 className="truncate text-sm font-bold text-app-text">{i18n.t('boardTitle')}</h2>
             <p className="text-[10px] uppercase tracking-widest text-app-text/40">
-              {isMissing(leadCount) ? <Unavailable /> : `${leadCount} real lead rows`}
+              {isMissing(leadCount) ? <Unavailable /> : `${leadCount} ${i18n.t('boardRealLeadRows')}`}
             </p>
           </div>
         </div>
         <div className="flex flex-shrink-0 items-center gap-2">
           <div className="hidden text-right sm:block">
-            <p className="text-[9px] font-bold uppercase tracking-widest text-app-text/40">Board cost / lead</p>
+            <p className="text-[9px] font-bold uppercase tracking-widest text-app-text/40">{i18n.t('boardCostPerLead')}</p>
             {isMissing(boardCostPerLead) ? (
               <Unavailable />
             ) : (
@@ -182,7 +183,7 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
           <button
             type="button"
             onClick={() => void load()}
-            aria-label="Refresh campaign board"
+            aria-label={i18n.t('boardRefreshLabel')}
             className="rounded-full glass p-2 text-app-text/60 transition-colors hover:text-app-accent"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -190,7 +191,7 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
           <button
             type="button"
             onClick={toggle}
-            aria-label="Close campaign board"
+            aria-label={i18n.t('boardCloseLabel')}
             className="rounded-full glass p-2 text-app-text/60 transition-colors hover:text-app-text"
           >
             <X size={14} />
@@ -211,25 +212,25 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
           {error ? (
             <div role="alert" className="glass mx-auto mt-16 max-w-md space-y-3 rounded-2xl p-6 text-center">
               <AlertCircle className="mx-auto text-red-400" size={20} />
-              <p className="text-sm text-app-text">Could not load the board</p>
+              <p className="text-sm text-app-text">{i18n.t('boardCouldNotLoad')}</p>
               <p className="text-[11px] text-app-text/50">{error}</p>
               <button
                 type="button"
                 onClick={() => void load()}
                 className="rounded-full border border-app-border/60 px-3 py-1.5 text-xs text-app-text hover:border-app-accent/50"
               >
-                Retry
+                {i18n.t('boardRetry')}
               </button>
             </div>
           ) : loading && leads.length === 0 ? (
             <div className="flex items-center justify-center gap-2 py-20 text-xs text-app-text/50">
               <Loader2 size={16} className="animate-spin text-app-accent" />
-              Loading lead rows…
+              {i18n.t('boardLoadingRows')}
             </div>
           ) : leads.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-20 text-center text-app-text/40">
               <Building2 size={22} className="opacity-40" />
-              <p className="text-sm">No lead rows on the board yet</p>
+              <p className="text-sm">{i18n.t('boardNoRows')}</p>
             </div>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -241,13 +242,13 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest text-app-accent/70">
-                        <Building2 size={12} /> Company
+                        <Building2 size={12} /> {i18n.t('company')}
                       </div>
                       <h3 className="mt-1 truncate text-sm font-semibold text-app-text" title={lead.company ?? undefined}>
                         {lead.company ?? <Unavailable />}
                       </h3>
                       <p className="mt-0.5 truncate text-[11px] text-app-text/50" title={lead.industry ?? undefined}>
-                        Industry: {lead.industry ?? <Unavailable />}
+                        {i18n.t('industry')}: {lead.industry ?? <Unavailable />}
                       </p>
                     </div>
                     <span className="flex-shrink-0 rounded-full border border-app-border/50 bg-app-accent/5 px-2 py-1 text-[9px] font-bold uppercase tracking-widest text-app-text/70">
@@ -256,12 +257,12 @@ export const CampaignBoard: React.FC<CampaignBoardProps> = ({ authToken }) => {
                   </div>
                   <div className="mt-4 grid grid-cols-2 gap-2">
                     <Metric
-                      label="ICP fit"
+                      label={i18n.t('boardIcpFit')}
                       value={lead.icpFit}
                       format={(value) => `${value}%`}
                     />
                     <Metric
-                      label="Cost per lead"
+                      label={i18n.t('boardCostPerLeadLabel')}
                       value={lead.costPerLead}
                       format={(value) => value.toLocaleString('en-US', { maximumFractionDigits: 2 })}
                     />

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { i18n } from './services/i18n';
 
 interface DashboardData {
   users: {
@@ -35,6 +36,7 @@ const Stat = ({ label, value, sub }: { label: string; value: string | number; su
 );
 
 export default function AdminDashboard() {
+  const t = i18n.t;
   const [secret, setSecret] = useState('');
   const [input, setInput] = useState('');
   const [data, setData] = useState<DashboardData | null>(null);
@@ -65,9 +67,9 @@ export default function AdminDashboard() {
         body: JSON.stringify({ email: adminEmail, password: adminPassword })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Login failed');
+      if (!res.ok) throw new Error(data.error || t('adminLoginFailed'));
       if (!data.user || !data.user.is_admin) {
-        throw new Error('Admin access required — your account is not an administrator.');
+        throw new Error(t('adminAccessRequired'));
       }
       setAuthToken(data.token);
       setAdminLoginError('');
@@ -99,7 +101,7 @@ export default function AdminDashboard() {
       setError('');
       setConsecutiveFailures(0);
     } catch {
-      setError('Invalid admin secret.');
+      setError(t('adminInvalidSecret'));
       setConsecutiveFailures(prev => prev + 1);
     } finally {
       setIsLoading(false);
@@ -129,7 +131,7 @@ export default function AdminDashboard() {
       inactivityTimeout = setTimeout(() => {
         setSecret('');
         setData(null);
-        setError('Session expired due to inactivity');
+        setError(t('adminSessionExpired'));
       }, 30 * 60 * 1000); // 30 minutes
     };
 
@@ -150,21 +152,21 @@ export default function AdminDashboard() {
       <div className="min-h-screen bg-[#0a0a0a] text-white flex items-center justify-center">
         <div className="w-full max-w-sm space-y-6 p-8 rounded-3xl bg-white/5 border border-white/10">
           <div>
-            <h1 className="text-xl font-light">LEADJIN <span className="text-blue-400">Admin</span></h1>
-            <p className="text-xs opacity-40 mt-1">Administrator Authentication</p>
+            <h1 className="text-xl font-light">LEADJIN <span className="text-blue-400">{t('adminBadge')}</span></h1>
+            <p className="text-xs opacity-40 mt-1">{t('adminAuthTitle')}</p>
           </div>
           <p className="text-xs opacity-40">
-            Sign in with your founder email account. Only accounts with admin privileges can access this dashboard.
+            {t('adminAuthHelp')}
           </p>
           {adminLoginError && <p className="text-xs text-red-400">{adminLoginError}</p>}
           <form onSubmit={handleAdminLogin} className="space-y-4">
             <input
-              type="email" placeholder="Admin email" required
+              type="email" placeholder={t('adminEmailPlaceholder')} required
               value={adminEmail} onChange={e => setAdminEmail(e.target.value)}
               className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-blue-400/50"
             />
             <input
-              type="password" placeholder="Password" required
+              type="password" placeholder={t('password')} required
               value={adminPassword} onChange={e => setAdminPassword(e.target.value)}
               className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-blue-400/50"
             />
@@ -172,7 +174,7 @@ export default function AdminDashboard() {
               type="submit" disabled={adminLoginLoading}
               className="w-full bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl py-3 text-sm transition-colors"
             >
-              {adminLoginLoading ? 'Signing in...' : 'Sign In & Continue'}
+              {adminLoginLoading ? t('adminSigningIn') : t('adminSignInContinue')}
             </button>
           </form>
         </div>
@@ -185,21 +187,21 @@ export default function AdminDashboard() {
       <div className="min-h-screen bg-[#0a0a0a] text-white flex items-center justify-center">
         <div className="w-full max-w-sm space-y-6 p-8 rounded-3xl bg-white/5 border border-white/10">
           <div>
-            <h1 className="text-xl font-light">LEADJIN <span className="text-blue-400">Admin</span></h1>
-            <p className="text-xs opacity-40 mt-1">Developer Dashboard</p>
+            <h1 className="text-xl font-light">LEADJIN <span className="text-blue-400">{t('adminBadge')}</span></h1>
+            <p className="text-xs opacity-40 mt-1">{t('adminDevDashboard')}</p>
           </div>
           <p className="text-xs opacity-40">
-            Enter the admin secret to access the developer dashboard. If you need to switch accounts, sign out first.
+            {t('adminSecretHelp')}
           </p>
           <button
             onClick={() => { setAuthToken(''); setAdminEmail(''); setAdminPassword(''); setAdminLoginError(''); setSecret(''); setError(''); }}
             className="text-[10px] opacity-40 hover:opacity-80 underline text-blue-400/50 hover:text-blue-400"
           >
-            ← Sign out and switch account
+            {t('adminSignOutSwitch')}
           </button>
           <input
             type="password"
-            placeholder="Admin secret"
+            placeholder={t('adminSecretPlaceholder')}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && load(input)}
@@ -210,7 +212,7 @@ export default function AdminDashboard() {
             disabled={isLoading || !input.trim()}
             className="w-full bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl py-3 text-sm transition-colors"
           >
-            {isLoading ? 'Verifying...' : 'Access Dashboard'}
+            {isLoading ? t('adminVerifying') : t('adminAccessDashboard')}
           </button>
         </div>
       </div>
@@ -220,7 +222,7 @@ export default function AdminDashboard() {
   if (!data) {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white flex items-center justify-center">
-        <p className="text-xs opacity-40 animate-pulse">Loading...</p>
+        <p className="text-xs opacity-40 animate-pulse">{t('loading')}</p>
       </div>
     );
   }
@@ -232,17 +234,17 @@ export default function AdminDashboard() {
       {/* Header */}
       <div className="border-b border-white/10 px-8 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <h1 className="text-sm font-bold tracking-wider">LEADJIN <span className="text-blue-400">ADMIN</span></h1>
+          <h1 className="text-sm font-bold tracking-wider">LEADJIN <span className="text-blue-400">{t('adminBadgeUpper')}</span></h1>
           <span className="text-[10px] opacity-30 font-mono">{data.env.appUrl}</span>
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-[10px] opacity-30">Refreshed {lastRefresh} · auto 30s</span>
+          <span className="text-[10px] opacity-30">{t('adminRefreshed')} {lastRefresh} {t('adminAutoRefresh')}</span>
           <button onClick={() => load(secret)} className="text-[10px] opacity-40 hover:opacity-80 border border-white/10 px-3 py-1.5 rounded-lg transition-opacity">
-            Refresh now
+            {t('adminRefreshNow')}
           </button>
           <button onClick={() => { setSecret(''); setData(null); setError(''); setAuthToken(''); setAdminEmail(''); setAdminPassword(''); setAdminLoginError(''); }}
             className="text-[10px] opacity-40 hover:opacity-80 border border-white/10 px-3 py-1.5 rounded-lg transition-opacity">
-            Logout
+            {t('adminLogout')}
           </button>
         </div>
       </div>
@@ -251,7 +253,7 @@ export default function AdminDashboard() {
 
         {/* Environment Config */}
         <section className="space-y-3">
-          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Environment Config</p>
+          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">{t('adminEnvConfig')}</p>
           <div className="flex flex-wrap gap-2">
             <Pill ok={data.env.gemini} label="GEMINI_API_KEY" />
             <Pill ok={data.env.googleOAuth} label="GOOGLE_OAUTH" />
@@ -262,23 +264,23 @@ export default function AdminDashboard() {
 
         {/* Top Stats */}
         <section className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-          <Stat label="Total Users" value={data.users.total} sub={`${data.users.activeSessions} active sessions`} />
-          <Stat label="Free" value={data.users.byPlan.free} />
-          <Stat label="Basic" value={data.users.byPlan.basic} />
-          <Stat label="Pro" value={data.users.byPlan.pro} />
-          <Stat label="Total Leads" value={data.leads.total} />
-          <Stat label="Revenue (Paid)" value={`$${data.revenue.paid.toLocaleString()}`} sub={`$${data.revenue.pipeline.toLocaleString()} pipeline`} />
+          <Stat label={t('adminTotalUsers')} value={data.users.total} sub={`${data.users.activeSessions} ${t('adminActiveSessions')}`} />
+          <Stat label={t('adminPlanFree')} value={data.users.byPlan.free} />
+          <Stat label={t('adminPlanBasic')} value={data.users.byPlan.basic} />
+          <Stat label={t('adminPlanPro')} value={data.users.byPlan.pro} />
+          <Stat label={t('totalLeads')} value={data.leads.total} />
+          <Stat label={t('adminRevenuePaid')} value={`$${data.revenue.paid.toLocaleString()}`} sub={`$${data.revenue.pipeline.toLocaleString()} ${t('adminPipeline')}`} />
         </section>
 
         {/* Email Health */}
         <section className="space-y-3">
-          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Email Queue Health</p>
+          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">{t('adminEmailHealth')}</p>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <Stat label="Total Queued" value={data.email.total} />
-            <Stat label="Pending (now)" value={data.email.pending} />
-            <Stat label="Scheduled" value={data.email.scheduled} sub="Day 3 / Day 7" />
-            <Stat label="Sent" value={data.email.sent} />
-            <Stat label="Failed" value={data.email.failed} sub={`${deliveryRate}% delivery rate`} />
+            <Stat label={t('adminTotalQueued')} value={data.email.total} />
+            <Stat label={t('adminPendingNow')} value={data.email.pending} />
+            <Stat label={t('adminScheduled')} value={data.email.scheduled} sub={t('adminDay37')} />
+            <Stat label={t('adminSent')} value={data.email.sent} />
+            <Stat label={t('adminFailed')} value={data.email.failed} sub={`${deliveryRate}% ${t('adminDeliveryRate')}`} />
           </div>
           {/* Delivery bar */}
           <div className="h-2 rounded-full bg-white/5 overflow-hidden">
@@ -290,13 +292,13 @@ export default function AdminDashboard() {
 
           {/* Lead Pipeline */}
           <section className="space-y-3">
-            <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Lead Pipeline (All Users)</p>
+            <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">{t('adminLeadPipelineAll')}</p>
             <div className="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-white/10">
-                    <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">Status</th>
-                    <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">Count</th>
+                    <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">{t('status')}</th>
+                    <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">{t('adminCount')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
@@ -307,7 +309,7 @@ export default function AdminDashboard() {
                     </tr>
                   ))}
                   {data.leads.byStatus.length === 0 && (
-                    <tr><td colSpan={2} className="p-4 text-center opacity-30 text-xs">No leads yet</td></tr>
+                    <tr><td colSpan={2} className="p-4 text-center opacity-30 text-xs">{t('adminNoLeads')}</td></tr>
                   )}
                 </tbody>
               </table>
@@ -316,14 +318,14 @@ export default function AdminDashboard() {
 
           {/* Leads Per User */}
           <section className="space-y-3">
-            <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Top Users by Leads</p>
+            <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">{t('adminTopUsers')}</p>
             <div className="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-white/10">
-                    <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">User</th>
-                    <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">Plan</th>
-                    <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">Leads</th>
+                    <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">{t('adminUser')}</th>
+                    <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">{t('adminPlan')}</th>
+                    <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">{t('leadsCount')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
@@ -346,15 +348,15 @@ export default function AdminDashboard() {
 
         {/* Recent Users */}
         <section className="space-y-3">
-          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Recent Registrations</p>
+          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">{t('adminRecentRegistrations')}</p>
           <div className="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/10">
-                  <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">Email</th>
-                  <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">Plan</th>
-                  <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">Searches</th>
-                  <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">Joined</th>
+                  <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">{t('email')}</th>
+                  <th className="text-left p-4 text-[10px] uppercase tracking-widest opacity-40">{t('adminPlan')}</th>
+                  <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">{t('adminSearches')}</th>
+                  <th className="text-right p-4 text-[10px] uppercase tracking-widest opacity-40">{t('adminJoined')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -377,10 +379,10 @@ export default function AdminDashboard() {
 
         {/* Recent Activity */}
         <section className="space-y-3">
-          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">Recent Activity Log</p>
+          <p className="text-[10px] uppercase tracking-widest opacity-40 font-bold">{t('adminRecentActivity')}</p>
           <div className="rounded-2xl bg-white/5 border border-white/10 divide-y divide-white/5">
             {data.recentActivity.length === 0 && (
-              <p className="p-4 text-xs opacity-30 text-center">No activity yet</p>
+              <p className="p-4 text-xs opacity-30 text-center">{t('adminNoActivity')}</p>
             )}
             {data.recentActivity.map((a: any, i: number) => (
               <div key={i} className="flex items-start gap-4 p-4">
@@ -395,7 +397,7 @@ export default function AdminDashboard() {
         </section>
 
         <div className="pt-4 text-center">
-          <p className="text-[10px] opacity-20 font-mono">LEADJIN Admin · {data.timestamp}</p>
+          <p className="text-[10px] opacity-20 font-mono">LEADJIN {t('adminBadge')} · {data.timestamp}</p>
         </div>
       </div>
     </div>

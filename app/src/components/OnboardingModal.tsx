@@ -65,21 +65,21 @@ export const OnboardingModal = ({
           </div>
 
           <div className="space-y-4">
-            <p className="text-[10px] uppercase tracking-[0.3em] opacity-40">Regional Intelligence</p>
+            <p className="text-[10px] uppercase tracking-[0.3em] opacity-40">{t.regionalIntelligence}</p>
             <div className="grid grid-cols-2 gap-4">
               <button 
                 onClick={() => setMajlisModeEnabled(!majlisModeEnabled)}
                 className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-2 ${majlisModeEnabled ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'glass opacity-60'}`}
               >
                 <Globe size={18} />
-                <span className="text-[8px] font-bold uppercase tracking-widest">Majlis Mode</span>
+                <span className="text-[8px] font-bold uppercase tracking-widest">{t.majlisModeLabel}</span>
               </button>
               <button 
                 onClick={() => setVision2030Enabled(!vision2030Enabled)}
                 className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-2 ${vision2030Enabled ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' : 'glass opacity-60'}`}
               >
                 <Trophy size={18} />
-                <span className="text-[8px] font-bold uppercase tracking-widest">Vision 2030</span>
+                <span className="text-[8px] font-bold uppercase tracking-widest">{t.vision2030Label}</span>
               </button>
             </div>
           </div>
