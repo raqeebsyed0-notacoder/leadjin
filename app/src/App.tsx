@@ -12,6 +12,10 @@ import { CampaignBoard } from './components/CampaignBoard';
 // Autopilot v1 (wiring lane): default home view + persistent Ask Jin dock.
 import { AutopilotHome } from './components/autopilot/AutopilotHome';
 import { AskJinDock, type AskJinMessage } from './components/autopilot/AskJinDock';
+// Locale singleton read by AutopilotHome / AskJinDock (task lj-ar/layout-fix2).
+import { i18n } from './services/i18n';
+// Layout fixes B/C/D for the docked working pane and floating launcher.
+import './components/autopilot/jin-layout.css';
 // Task 2G: Lazy load LandingPage for performance
 const LandingPage = lazy(() => import('./landing/LandingPage').then(m => ({ default: m.LandingPage })));
 
@@ -1321,6 +1325,9 @@ function AppContent() {
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
     document.documentElement.lang = language;
     localStorage.setItem('leadjin_lang', language);
+    // Wire the locale singleton the autopilot components read via i18n.t().
+    // Without this the document flipped to RTL but those components stayed EN.
+    i18n.setLocale(language);
   }, [language]);
 
   useEffect(() => {
@@ -2361,7 +2368,7 @@ function AppContent() {
   );
 
   return (
-    <div className={`flex ${language === 'ar' ? 'font-arabic' : 'font-sans'} relative bg-app-bg text-app-text overflow-hidden ${currentUser?.subscription_status === 'trial' || currentUser?.subscription_status === 'trial_expired' ? 'h-[calc(100vh-2rem)] mt-8' : 'h-screen'}`}>
+    <div className={`flex ${language === 'ar' ? 'font-arabic' : 'font-sans'} ${askJinOpen ? 'askjin-open' : ''} relative bg-app-bg text-app-text overflow-hidden ${currentUser?.subscription_status === 'trial' || currentUser?.subscription_status === 'trial_expired' ? 'h-[calc(100vh-2rem)] mt-8' : 'h-screen'}`}>
       {/* Background Elements */}
       <div className="topographic-waves" />
 
@@ -2385,12 +2392,16 @@ function AppContent() {
       {/* Jin AI Employee Status */}
       {authToken && (
         <>
-          <JinEmployeeDashboard
-            isOpen={showJinPanel}
-            onToggle={() => setShowJinPanel(!showJinPanel)}
-            authToken={authToken}
-          />
-          <JinWorkingPane authToken={authToken} language={language} />
+          <div className="jin-chat-host">
+            <JinEmployeeDashboard
+              isOpen={showJinPanel}
+              onToggle={() => setShowJinPanel(!showJinPanel)}
+              authToken={authToken}
+            />
+          </div>
+          {/* JinWorkingPane is docked into the flow at the end of <main>
+              (see .jin-dock-host in components/autopilot/jin-layout.css)
+              so it never covers the cards. */}
           <CampaignBoard authToken={authToken} />
         </>
       )}
@@ -4195,6 +4206,11 @@ function AppContent() {
                   </div>
                 </div>
               </motion.div>
+            </div>
+          )}
+          {authToken && (
+            <div className="jin-dock-host">
+              <JinWorkingPane authToken={authToken} language={language} />
             </div>
           )}
         </div>
