@@ -1,0 +1,57 @@
+/* Jin working pane layout fixes — task lj-ar/layout-fix2 (2026-11-28).
+   Scoped stylesheet imported by App.tsx. Kept here rather than appended to
+   src/index.css so the change stays inside the autopilot wiring lane.
+
+   B: dock the working pane into the document flow so it never covers the
+      cards at 1440x900 or 390px; it remains collapsible via its own controls.
+   C: hide the employee-dashboard launcher while AskJinDock is open.
+   D: remove the static "Jin is working" heading/launcher copy so only the
+      dynamic connection state and run state report status.
+
+   Every selector is scoped to .jin-dock-host / .jin-chat-host so AskJinDock
+   and the employee-dashboard panel keep their original floating styling. */
+.jin-dock-host {
+  padding-inline: 1rem;
+  padding-block-end: 2rem;
+}
+.jin-dock-host .jin-panel,
+.jin-dock-host .jin-launcher {
+  position: static;
+  inset: auto;
+  z-index: auto;
+  width: 100%;
+  max-width: none;
+  height: auto;
+  max-height: none;
+  box-shadow: none;
+  animation: none;
+}
+.jin-dock-host .jin-panel {
+  margin-block-start: 1.5rem;
+}
+.jin-dock-host .jin-launcher {
+  display: inline-flex;
+  margin-block-start: 1.5rem;
+}
+.jin-dock-host .jin-transcript {
+  max-block-size: 10rem;
+}
+
+/* D: heading/launcher text is a neutral label, never a live status claim.
+   The dynamic .jin-state (Offline / Connecting / Live) and .jin-working
+   region are now the single source of truth; "working" shows only while a
+   live run is actually in progress. */
+.jin-dock-host .jin-heading strong,
+.jin-dock-host .jin-launcher > span:not(.jin-launcher-dot) {
+  display: none;
+}
+
+/* C: the floating chat launcher would otherwise sit on top of the open
+   Ask Jin chat input; hide it while the dock is open. */
+.askjin-open .jin-chat-host .jin-launcher {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .jin-dock-host .jin-transcript { max-block-size: 7rem; }
+}
