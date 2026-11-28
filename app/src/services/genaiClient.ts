@@ -161,7 +161,7 @@ async function callFreeProvider(params: {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(300_000),
   });
   if (!res.ok) {
     const txt = await res.text();
@@ -521,7 +521,7 @@ async function callOllama(params: ChatParams): Promise<{ text: string; model?: s
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(300_000),
   });
   if (!res.ok) {
     const txt = await res.text();
@@ -558,7 +558,7 @@ async function callGateway(params: ChatParams): Promise<{ text: string; model?: 
       Authorization: `Bearer ${getGatewayApiKey()}`,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(300_000),
   });
   if (!res.ok) {
     const txt = await res.text();
@@ -702,7 +702,7 @@ export async function* generateContentStream(params: {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(300_000),
   });
   if (!res.ok) {
     const txt = await res.text();

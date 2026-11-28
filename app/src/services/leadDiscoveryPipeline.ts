@@ -78,6 +78,14 @@ export interface NormalizedLead {
   provenance_url: string | null;
   discovered_at: string;
   raw: unknown;
+  /** Majlis-mode cultural tips from the discovery model, per lead row. */
+  majlis_tips?: string[];
+  /** Vision 2030 alignment from the discovery model, per lead row. */
+  vision_2030_alignment?: {
+    score?: number;
+    program?: string;
+    reasoning?: string;
+  };
 }
 
 export interface LeadDiscoveryResult {
@@ -612,6 +620,21 @@ function normaliseModelRows(raw: unknown[], input: LeadDiscoveryInput): Normaliz
       verified_real: 0,
       provenance_url: null,
       discovered_at: new Date().toISOString(),
+      majlis_tips: asStringArray(row.majlis_mode_tips),
+      vision_2030_alignment:
+        row.vision_2030_alignment && typeof row.vision_2030_alignment === "object"
+          ? ({
+              score: num((row.vision_2030_alignment as Record<string, unknown>).score),
+              program:
+                typeof (row.vision_2030_alignment as Record<string, unknown>).program === "string"
+                  ? ((row.vision_2030_alignment as Record<string, unknown>).program as string)
+                  : undefined,
+              reasoning:
+                typeof (row.vision_2030_alignment as Record<string, unknown>).reasoning === "string"
+                  ? ((row.vision_2030_alignment as Record<string, unknown>).reasoning as string)
+                  : undefined,
+            } as { score?: number; program?: string; reasoning?: string })
+          : undefined,
       raw,
     });
   }

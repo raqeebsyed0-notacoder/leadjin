@@ -34,6 +34,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { verifyEmail, type EmailVerificationResult } from "./emailVerifier.js";
 import { mineSocialProfiles } from "./socialIntelligence.js";
+import { agentReachLeg } from "./agentReachLeg.js";
 
 const execFileAsync = promisify(execFile);
 const TINYFISH_BIN = "/home/euphoria/.local/bin/tinyfish";
@@ -102,7 +103,7 @@ export interface HarvestedContact {
   /** LinkedIn profile URL when found. */
   linkedin: string;
   /** Where this contact came from. */
-  source: "company-site" | "social-intelligence" | "public-linkedin";
+  source: "company-site" | "social-intelligence" | "public-linkedin" | "agent-reach";
   /** The URL the data was collected from. */
   evidence_url: string;
   /** ISO-8601 snapshot of the harvest run. */
@@ -611,7 +612,17 @@ export async function harvestContactsForCompany(
     }
   }
 
-  // 4. Verify any harvested email and record status.
+  // 4. Public page reads through Agent Reach (Jina Reader backend, keyless).
+  {
+    const ar = await agentReachLeg(company, domain, city);
+    errors.push(...ar.errors);
+    for (const c of ar.contacts) {
+      const k = digest(c);
+      if (!seen.has(k)) seen.set(k, c);
+    }
+  }
+
+  // 5. Verify any harvested email and record status.
   {
     const uniqueEmails = dedupeStrings(
       contacts.map((c) => c.email).filter(Boolean),

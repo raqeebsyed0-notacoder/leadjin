@@ -135,6 +135,16 @@ export interface AssembledLead {
   fieldEvidence: FieldEvidence;
   /** Auditable search/Jina input & accepted-field output */
   corroboration_log: CorroborationEntry[];
+  /** Majlis mode tips from the discovery model, per assembled lead. */
+  majlis_tips?: string[];
+  /** Raw majlis mode tips from the discovery model, kept for fallback. */
+  majlis_mode_tips?: string[];
+  /** Vision 2030 alignment from the discovery model, per assembled lead. */
+  vision_2030_alignment?: {
+    score?: number;
+    program?: string;
+    reasoning?: string;
+  };
 }
 
 export interface OrchestrateResult {
@@ -148,7 +158,238 @@ export interface OrchestrateResult {
   signal_path: 'vertex' | 'api_key' | 'blocked';
 }
 
+/** Sanitize a company name sourced from a third-party discovery leg. The raw
+ * value is frequently a marketing title rather than the legal company name
+ * (e.g. "Analytix Arabia Management Consultants | Riyadh | Business Setup in
+ * Saudi Arabia", "Code7 Best IT Company in Saudi Arabia"). Return a short,
+ * primary brand name: split on pipe / dash / descriptive-comma, prefer the
+ * segment that looks like a name, and drop Arabic marketing phrases and
+ * English marketing tails.
+ *
+ * Pure function — no network, no DB. */
+export function normalizeCompanyName(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+
+  // 1) Split into candidate segments on pipes, dash separators (" - ", "–",
+  //    " — ") and commas whose right-hand part reads as a description.
+  const segments = splitSegments(trimmed);
+
+  // 2) Prefer the segment that looks like a name (most brand words, fewest
+  //    marketing/filler words). Ties keep the earlier segment.
+  let best = segments[0];
+  for (let i = 1; i < segments.length; i++) {
+    if (scoreSegment(segments[i]) > scoreSegment(best)) {
+      best = segments[i];
+    }
+  }
+
+  // 3) Clean the chosen segment.
+  const name = cleanSegment(best);
+
+  // 4) Never return an empty string; fall back to the trimmed raw input.
+  return name || trimmed;
+}
+
 // ---------------------------------------------------------------------------
+function splitSegments(name: string): string[] {
+  const segments: string[] = [];
+  let cur = '';
+  let i = 0;
+  const n = name.length;
+  while (i < n) {
+    const ch = name[i];
+    if (ch === '|') {
+      segments.push(cur.trim());
+      cur = '';
+      i++;
+      while (i < n && name[i] === ' ') i++;
+      continue;
+    }
+    if (ch === ',') {
+      if (isDescriptionSegment(name, i + 1)) {
+        segments.push(cur.trim());
+        cur = '';
+        i++;
+        while (i < n && name[i] === ' ') i++;
+        continue;
+      }
+    }
+    if (ch === '-' && i + 1 < n && name[i + 1] === ' ') {
+      segments.push(cur.trim());
+      cur = '';
+      i += 2;
+      while (i < n && name[i] === ' ') i++;
+      continue;
+    }
+    if (ch === '–' || ch === '—') {
+      segments.push(cur.trim());
+      cur = '';
+      i++;
+      while (i < n && name[i] === ' ') i++;
+      continue;
+    }
+    cur += ch;
+    i++;
+  }
+  segments.push(cur.trim());
+  return segments.filter(Boolean);
+}
+
+// Company-name normalization (pure helpers)
+// ---------------------------------------------------------------------------// Company-name normalization (pure helpers)
+// ---------------------------------------------------------------------------
+
+const ARABIC_MARKETING_PHRASES = [
+  'دعاية وإعلان',
+  'لهذا الدعاية',
+  'للدعاية',
+  'للإعلان',
+  'تنظيم فعاليات',
+  'وهيات تجارية',
+  'التسويق',
+  'التجارة',
+  'التجاري',
+  'البرمجيات',
+  'الفعاليات',
+  'الخدمات',
+  'خدمات',
+  'تسويق',
+  'برمجيات',
+  'تنظيم',
+  'دعاية',
+  'إعلان',
+  'فعاليات',
+  'تجارية',
+]
+  .sort((a, b) => b.length - a.length);
+
+const ARABIC_NOISE_WORDS = [
+  'شركة', 'الشركة', 'للدعاية', 'لهذا الدعاية', 'للإعلان', 'للخدمات',
+  'تنظيم', 'فعاليات', 'دعاية', 'إعلان', 'تجارية', 'تجارة', 'البرمجيات',
+  'الخدمات', 'الخدمة', 'التسويق', 'التجارة', 'تسويق',
+  'والدعاية', 'والتجارة', 'والتسويق', 'والخدمات', 'والبرمجيات',
+  'في', 'من', 'عن', 'أو', 'و',
+];
+
+const ENGLISH_STRIP_WORDS = [
+  'best', 'it', 'company', 'companies', 'in', 'and', 'the', 'of',
+  'advertising', 'branding', 'events', 'event', 'marketing', 'riyadh',
+  'saudi', 'arabia', 'kSA', 'ksa', 'k sa', 'kingdom', 'establishment',
+  'setups', 'setup', 'business', 'limited', 'ltd', 'inc', 'co', 'ltd',
+  'inc.', 'co.', 'plc', 'acc', 'a/s', 'sa', 's.a', 's.a.', 'public', 'private',
+];
+
+const ENGLISH_NOISE = new Set([
+  ...ENGLISH_STRIP_WORDS,
+  'solutions', 'solution', 'consulting', 'consultants', 'consultant', 'consultancy',
+  'management', 'administrator', 'administration',
+  'international', 'resources', 'resource', 'technology', 'technologies', 'technological',
+  'industrial', 'chemical', 'petrochemical', 'energy', 'trading', 'trade',
+  'financial', 'bank', 'capital', 'investment', 'investments',
+  'holdings', 'holding', 'firm', 'firms', 'corporation', 'plc', 'corp',
+  'saudi', 'arabia', 'riyadh', 'kSA', 'ksa', 'k sa', 'kingdom', 'establishment',
+  'setups', 'setup', 'business', 'businesses', 'business setup',
+  'best', 'advertising', 'advertise', 'branding', 'brand', 'events', 'event', 'marketing',
+  'the', 'and', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'from', 'by',
+  'is', 'are', 'was', 'were', 'be', 'this', 'that', 'these', 'those', 'it', 'some', 'other',
+  'no', 'not', 'or', 'ltd', 'inc', 'co', 'ltd', 'inc.', 'co.', 'plc', 'acc', 'a/s', 'sa',
+]);
+
+const ENGLISH_MARKETING_MARKERS = /best|advertising|branding|events company|company in|marketing/i;
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function tokensOf(value: string): string[] {
+  return value.split(/[^\p{L}\p{N}_]+/gu).filter(Boolean);
+}
+
+function isLatinWord(tok: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9._-]*$/.test(tok);
+}
+
+function isArabicWord(tok: string): boolean {
+  return /^[\u0600-\u06FF][\u0600-\u06FF\u0750-\u077F\w]*$/.test(tok);
+}
+
+function isDescriptionSegment(name: string, fromIndex: number): boolean {
+  const rest = name.slice(fromIndex).toLowerCase();
+  const words = rest.split(/\s+/).filter(Boolean);
+  const DESC_WORDS = new Set([
+    // geography / location
+    'riyadh', 'jeddah', 'dammam', 'khobar', 'makkah', 'madinah', 'abha', 'taif',
+    'buraydah', 'qassim', 'asir', 'hajjah', 'jizan', 'najran', 'saudi', 'arabia',
+    'kingdom', 'ksa', 'k sa',
+    // business / service descriptors
+    'company', 'companies', 'services', 'service', 'consulting', 'consultants',
+    'consultant', 'solution', 'solutions', 'management', 'business', 'businesses',
+    'business setup', 'setup', 'setups', 'establishment', 'industry', 'industries',
+    'trading', 'trade', 'financial', 'bank', 'capital', 'investment',
+    'international', 'resources', 'technology', 'technologies', 'technological',
+    'industrial', 'chemical', 'petrochemical', 'energy', 'firm', 'firms', 'group',
+    'groups', 'inc', 'ltd', 'co', 'plc', 'corp', 'corporation',
+    // marketing / listing descriptors
+    'best', 'advertising', 'advertise', 'branding', 'brand', 'events', 'event',
+    'marketing', 'exhibition', 'exhibitions', 'fair', 'fairs', 'show', 'shows',
+    // filler
+    'the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'with',
+    'from', 'by', 'is', 'are', 'was', 'were', 'be', 'this', 'that', 'these',
+    'those', 'it', 'some', 'other',
+  ]);
+  return words.some((w) => DESC_WORDS.has(w));
+}
+
+function scoreSegment(seg: string): number {
+  let score = 0;
+  for (const tok of tokensOf(seg)) {
+    if (!tok) continue;
+    if (isArabicWord(tok)) {
+      score += ARABIC_NOISE_WORDS.includes(tok) ? -1 : 2;
+    } else if (isLatinWord(tok)) {
+      const t = tok.toLowerCase();
+      score += ENGLISH_NOISE.has(t) ? -1 : (t.length >= 4 ? 3 : 2);
+    }
+  }
+  return score;
+}
+
+function cleanSegment(seg: string): string {
+  let name = seg;
+
+  // 1) Drop Arabic marketing phrases (longest first).
+  for (const phrase of ARABIC_MARKETING_PHRASES) {
+    name = name.replace(new RegExp(`\\s*${escapeRegex(phrase)}\\s*`, 'g'), ' ');
+  }
+
+  // 2) Strip Arabic noise tokens from the edges.
+  name = name.replace(new RegExp(`^\\s*(?:${ARABIC_NOISE_WORDS.join('|')})\\s+`), '');
+  name = name.replace(new RegExp(`\\s+(?:${ARABIC_NOISE_WORDS.join('|')})\\s*$`), '');
+
+  // 3) Drop English marketing tails from a description segment.
+  if (ENGLISH_MARKETING_MARKERS.test(name)) {
+    const words = name.trim().split(/\s+/);
+    let start = 0;
+    while (start < words.length && ENGLISH_NOISE.has(words[start].toLowerCase())) {
+      start++;
+    }
+    let end = words.length - 1;
+    while (end > start && ENGLISH_NOISE.has(words[end].toLowerCase())) {
+      end--;
+    }
+    name = words.slice(start, end + 1).join(' ');
+  }
+
+  // 4) Drop a trailing department/branch suffix (" , Head Office", ", Main Branch",
+  //    Arabic equivalents) - a place label, not part of the business name.
+  name = name.replace(
+    /\s*[,،]\s*(?:head\s*office|main\s*(?:branch|office)|branch|showroom|الفرع الرئيسي|المكتب الرئيسي|الادارة العامة)\s*$/i,
+    ''
+  );
+
+  return name.trim();
+}
 // parsePublicSource(text, url, candidateName?, candidateDomain?)
 // Extract corroborated fields from fetched text (IMPL-SPEC Gap 1).
 //
@@ -252,14 +493,14 @@ export function parsePublicSource(
   }
 
   if (personName) fieldEvidence.name = { value: personName, url };
-  if (companyName) fieldEvidence.company_name = { value: companyName, url };
+  if (companyName) fieldEvidence.company_name = { value: normalizeCompanyName(companyName), url };
   if (hqCity) fieldEvidence.hq_city = { value: hqCity, url };
   if (linkedin) fieldEvidence.linkedin = { value: linkedin, url };
   if (email) fieldEvidence.email = { value: email, url };
   if (domain) fieldEvidence.domain = { value: domain, url };
 
   return {
-    company_name: companyName,
+    company_name: normalizeCompanyName(companyName),
     domain,
     hq_city: hqCity,
     linkedin,
@@ -472,11 +713,24 @@ export async function discoverCompaniesViaPlaces(
     for (const place of found.places.slice(0, count)) {
       try {
         const detail = await getPlaceDetails({ placeId: place.id });
-        if (!detail.websiteUri) continue;
-        const domain = new URL(detail.websiteUri).hostname.replace(/^www\./i, '');
-        if (domain.includes('.')) companies.push({ name: detail.displayName, domain });
+        const displayName = detail?.displayName ?? place.displayName;
+        const websiteUri = detail?.websiteUri ?? place.websiteUri;
+        if (websiteUri) {
+          const domain = new URL(websiteUri).hostname.replace(/^www\./i, '');
+          if (domain.includes('.')) {
+            companies.push({ name: normalizeCompanyName(displayName), domain });
+          } else {
+            companies.push({ name: normalizeCompanyName(displayName), domain: '' });
+          }
+        } else {
+          // No website on the details response: keep the place as a candidate
+          // without a domain; the pipeline's normalisePlacesRows will leave
+          // website empty rather than dropping the company.
+          companies.push({ name: normalizeCompanyName(displayName), domain: '' });
+        }
       } catch {
         // One place with no usable website must not discard the others.
+        companies.push({ name: normalizeCompanyName(place.displayName), domain: '' });
       }
       if (companies.length >= count) break;
     }
@@ -647,9 +901,14 @@ function storeLead(
       lead.company_domain,
       lead.linkedin,
       lead.evidence_urls.join('|'),
-      // Production-wiring params persisted into the leads row (existing columns).
-      lead.vision2030 ?? null,
-      lead.majlisMode ?? null,
+      // Produce vision_2030_program from the discovery-model alignment, never the raw boolean.
+      (lead.vision_2030_alignment?.program as string) ?? null,
+      // majlis_tips: JSON-stringify the normalized tips array when present.
+      Array.isArray(lead.majlis_tips) && lead.majlis_tips.length
+        ? JSON.stringify(lead.majlis_tips)
+        : Array.isArray(lead.majlis_mode_tips) && lead.majlis_mode_tips.length
+          ? JSON.stringify(lead.majlis_mode_tips)
+          : null,
     );
 
     console.log(`[HuntOrchestrator] Stored lead ${lead.lead_id} for ${lead.decision_maker.name} @ ${lead.company_name}`);

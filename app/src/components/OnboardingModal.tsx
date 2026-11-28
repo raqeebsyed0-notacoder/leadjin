@@ -1,5 +1,5 @@
 import { motion } from 'motion/react';
-import { Zap, Sun, Moon, Globe, Trophy } from 'lucide-react';
+import { Zap, Sun, Moon, Globe, Trophy, UploadCloud } from 'lucide-react';
 import { translations } from '../i18n/translations';
 
 interface OnboardingModalProps {
@@ -12,18 +12,26 @@ interface OnboardingModalProps {
   setMajlisModeEnabled: (enabled: boolean) => void;
   vision2030Enabled: boolean;
   setVision2030Enabled: (enabled: boolean) => void;
+  companyName: string;
+  onCompanyNameChange: (v: string) => void;
+  logoDataUrl: string | null;
+  onLogoChange: (v: string | null) => void;
 }
 
-export const OnboardingModal = ({ 
-  onComplete, 
-  language, 
-  setLanguage, 
-  darkMode, 
-  setDarkMode, 
-  majlisModeEnabled, 
-  setMajlisModeEnabled, 
-  vision2030Enabled, 
-  setVision2030Enabled 
+export const OnboardingModal = ({
+  onComplete,
+  language,
+  setLanguage,
+  darkMode,
+  setDarkMode,
+  majlisModeEnabled,
+  setMajlisModeEnabled,
+  vision2030Enabled,
+  setVision2030Enabled,
+  companyName,
+  onCompanyNameChange,
+  logoDataUrl,
+  onLogoChange
 }: OnboardingModalProps) => {
   const t = translations[language as keyof typeof translations] || translations.en;
   
@@ -43,6 +51,55 @@ export const OnboardingModal = ({
             <Zap size={40} fill="currentColor" />
           </div>
           <h2 className="text-4xl font-light tracking-tight">{t.welcome}</h2>
+        </div>
+
+        {/* Company details: name + logo */}
+        <div className="space-y-4">
+          <p className="text-[10px] uppercase tracking-[0.3em] opacity-40">{t.companyStepTitle}</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-3">
+              <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">{t.companyNameLabel}</label>
+              <input
+                type="text"
+                value={companyName}
+                onChange={(e) => onCompanyNameChange(e.target.value)}
+                className="w-full glass rounded-2xl p-5 text-sm focus:border-app-accent outline-none transition-all"
+              />
+            </div>
+            <div className="flex flex-col gap-3">
+              <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">{t.companyLogoLabel}</label>
+              <div className="flex items-center gap-4">
+                {logoDataUrl && (
+                  <img src={logoDataUrl} alt="Company logo preview" className="max-h-12 rounded-lg border border-app-border/30" />
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  id="company-logo-input"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        if (typeof reader.result === 'string') {
+                          onLogoChange(reader.result);
+                        }
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                />
+                <label
+                  htmlFor="company-logo-input"
+                  className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col items-center gap-2 ${logoDataUrl ? 'bg-app-accent text-app-bg border-app-accent' : 'glass opacity-60'}`}
+                >
+                  <UploadCloud size={18} />
+                  <span className="text-[8px] font-bold uppercase tracking-widest">{t.companyLogoLabel}</span>
+                </label>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className="space-y-8">

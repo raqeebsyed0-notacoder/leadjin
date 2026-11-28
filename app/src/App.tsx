@@ -195,6 +195,25 @@ const SortableLeadCard = ({ lead, language }: any) => {
                 </span>
               )}
             </div>
+            <div className="flex flex-wrap items-center gap-1 mt-0.5">
+              {(lead.vision_2030_program || lead.vision_2030_alignment?.program) && (
+                <span className="px-1.5 py-0.5 bg-blue-500/10 text-blue-400 text-[7px] font-bold uppercase tracking-widest rounded border border-blue-500/20">
+                  V2030: {String(lead.vision_2030_program || lead.vision_2030_alignment?.program).slice(0, 28)}
+                </span>
+              )}
+              {(() => {
+                let n = 0;
+                if (Array.isArray(lead.majlis_tips)) n = lead.majlis_tips.length;
+                else if (typeof lead.majlis_tips === 'string' && lead.majlis_tips) {
+                  try { const p = JSON.parse(lead.majlis_tips); n = Array.isArray(p) ? p.length : 0; } catch { n = 0; }
+                }
+                return n > 0 ? (
+                  <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 text-[7px] font-bold uppercase tracking-widest rounded border border-emerald-500/20">
+                    Majlis: {n}
+                  </span>
+                ) : null;
+              })()}
+            </div>
             <p className="opacity-60 truncate mt-0.5">{lead.company}</p>
             {lead.email && (
               <div className="flex items-center gap-1.5 mt-1">
@@ -342,6 +361,25 @@ const MobileLeadCard = ({ lead, contactedLeads, toggleContacted, setSelectedLead
               )}
             </div>
             <p className="text-[10px] opacity-50 uppercase tracking-[0.2em] truncate">{lead.title}</p>
+            <div className="flex flex-wrap items-center gap-1 mt-0.5">
+              {(lead.vision_2030_program || lead.vision_2030_alignment?.program) && (
+                <span className="px-1.5 py-0.5 bg-blue-500/10 text-blue-400 text-[7px] font-bold uppercase tracking-widest rounded border border-blue-500/20">
+                  V2030: {String(lead.vision_2030_program || lead.vision_2030_alignment?.program).slice(0, 28)}
+                </span>
+              )}
+              {(() => {
+                let n = 0;
+                if (Array.isArray(lead.majlis_tips)) n = lead.majlis_tips.length;
+                else if (typeof lead.majlis_tips === 'string' && lead.majlis_tips) {
+                  try { const p = JSON.parse(lead.majlis_tips); n = Array.isArray(p) ? p.length : 0; } catch { n = 0; }
+                }
+                return n > 0 ? (
+                  <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 text-[7px] font-bold uppercase tracking-widest rounded border border-emerald-500/20">
+                    Majlis: {n}
+                  </span>
+                ) : null;
+              })()}
+            </div>
             {lead.email && (
               <div className="flex items-center gap-1.5 mt-1">
                 <Mail size={10} className="opacity-40" />
@@ -519,7 +557,8 @@ const translations = {
     settingsOutreach: "Outreach & AI",
     settingsServices: "Services & Pricing",
     settingsSystem: "System & Engine",
-    langToggle: "AR"
+        langToggle: "AR",
+    success: "Success",
   },
   ar: {
     harvest: "اكتشف العملاء",
@@ -697,7 +736,8 @@ const translations = {
     settingsIntegrations: "التكاملات",
     settingsOutreach: "التواصل والذكاء الاصطناعي",
     settingsServices: "الخدمات والأسعار",
-    settingsSystem: "النظام والمحرك"
+    settingsSystem: "النظام والمحرك",
+    success: "تم بنجاح"
   }
 };
 
@@ -760,8 +800,18 @@ const translations = {
 (translations.en as any).ramadanMode = "Ramadan Mode";
 (translations.en as any).vision2030Score = "Vision 2030 Score";
 (translations.en as any).langToggle = "AR";
+(translations.en as any).companyStepTitle = "Your company";
+(translations.en as any).companyNameLabel = "Company name";
+(translations.en as any).companyLogoLabel = "Company logo";
+(translations.en as any).majlisChipLabel = "Majlis tips";
+if ((translations as any).ar) {
+  (translations as any).ar.companyStepTitle = "شركتك";
+  (translations as any).ar.companyNameLabel = "اسم الشركة";
+  (translations as any).ar.companyLogoLabel = "شعار الشركة";
+  (translations as any).ar.majlisChipLabel = "نصائح المجلس";
+}
 
-const OnboardingModal = ({ onComplete, language, setLanguage, darkMode, setDarkMode, majlisModeEnabled, setMajlisModeEnabled, vision2030Enabled, setVision2030Enabled }: any) => {
+const OnboardingModal = ({ onComplete, language, setLanguage, darkMode, setDarkMode, majlisModeEnabled, setMajlisModeEnabled, vision2030Enabled, setVision2030Enabled, companyName, setCompanyName, logoDataUrl, setLogoDataUrl }: any) => {
   const t = translations[language as keyof typeof translations] || translations.en;
   
   return (
@@ -783,6 +833,36 @@ const OnboardingModal = ({ onComplete, language, setLanguage, darkMode, setDarkM
         </div>
 
         <div className="space-y-8">
+          <div className="space-y-4">
+            <p className="text-[10px] uppercase tracking-[0.3em] opacity-40">{(t as any).companyStepTitle || 'Your company'}</p>
+            <input
+              type="text"
+              value={companyName || ''}
+              onChange={(e) => setCompanyName(e.target.value)}
+              placeholder={(t as any).companyNameLabel || 'Company name'}
+              className="w-full glass rounded-xl px-4 py-3 text-sm outline-none focus:border-app-accent transition-all text-center"
+            />
+            <label className="flex items-center justify-center gap-3 p-4 rounded-2xl border border-dashed border-app-accent/30 cursor-pointer opacity-80 hover:opacity-100 transition-all">
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files && e.target.files[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = () => setLogoDataUrl(typeof reader.result === 'string' ? reader.result : null);
+                  reader.readAsDataURL(file);
+                }}
+              />
+              {logoDataUrl ? (
+                <img src={logoDataUrl} alt="Company logo preview" className="max-h-12 rounded-lg" />
+              ) : (
+                <span className="text-[9px] font-bold uppercase tracking-widest opacity-60">{(t as any).companyLogoLabel || 'Company logo'}</span>
+              )}
+            </label>
+          </div>
+
           <div className="space-y-4">
             <p className="text-[10px] uppercase tracking-[0.3em] opacity-40">{t.selectLang}</p>
             <div className="grid grid-cols-2 gap-4">
@@ -1126,6 +1206,7 @@ function AppContent() {
   const [enriching, setEnriching] = useState(false);
   const [activeTab, setActiveTab] = useState<'details' | 'sequence' | 'proposal' | 'quotation' | 'calendar' | 'interactions'>('details');
   const [showProposalPreview, setShowProposalPreview] = useState(false);
+  const [proposalGenerated, setProposalGenerated] = useState<string | null>(null);
   const [quotations, setQuotations] = useState<any[]>([]);
   const [bookings, setBookings] = useState<any[]>([]);
   const [quotationLoading, setQuotationLoading] = useState(false);
@@ -1153,8 +1234,8 @@ function AppContent() {
   const [companyProfile, setCompanyProfile] = useState(() => {
     try {
       const saved = localStorage.getItem('leadjin_company_profile');
-      return saved ? JSON.parse(saved) : { name: '', tagline: '', email: '', phone: '', website: '', address: '' };
-    } catch (e) { return { name: '', tagline: '', email: '', phone: '', website: '', address: '' }; }
+      return saved ? JSON.parse(saved) : { name: '', tagline: '', email: '', phone: '', website: '', address: '', logo: '' };
+    } catch (e) { return { name: '', tagline: '', email: '', phone: '', website: '', address: '', logo: '' }; }
   });
 
   const isProUser = currentUser?.subscription_plan === 'pro' || (currentUser as any)?.is_founder || (currentUser as any)?.founder;
@@ -1357,6 +1438,7 @@ function AppContent() {
           company_phone: companyProfile.phone,
           company_website: companyProfile.website,
           company_address: companyProfile.address,
+          company_logo: companyProfile.logo || undefined,
         })
       }).catch(() => {}); // silent — localStorage is the fallback
     }, 1500);
@@ -2199,6 +2281,33 @@ function AppContent() {
     }
   };
 
+  const handleGenerateProposal = async () => {
+    if (!selectedLead) return;
+    if (!authToken) {
+      setShowAuthModal(true);
+      return;
+    }
+    try {
+      const res = await authFetch('/api/proposals/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lead_id: selectedLead.lead_id,
+          locale: language,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setProposalGenerated(data.files?.html || null);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setNotification({ message: err.error || 'Proposal generation failed', type: 'error' });
+      }
+    } catch (err) {
+      setNotification({ message: 'Failed to generate proposal. Please try again.', type: 'error' });
+    }
+  };
+
   const handleDownloadQuotation = async (q: any) => {
     if (!selectedLead) return;
     try {
@@ -2385,6 +2494,10 @@ function AppContent() {
             setMajlisModeEnabled={setMajlisModeEnabled}
             vision2030Enabled={vision2030Enabled}
             setVision2030Enabled={setVision2030Enabled}
+            companyName={companyProfile.name}
+            setCompanyName={(v: string) => setCompanyProfile((p: any) => ({ ...p, name: v }))}
+            logoDataUrl={companyProfile.logo || null}
+            setLogoDataUrl={(v: string | null) => setCompanyProfile((p: any) => ({ ...p, logo: v || '' }))}
           />
         )}
       </AnimatePresence>
@@ -4719,111 +4832,126 @@ function AppContent() {
                     <div className="flex justify-between items-center">
                       <h4 className="text-[9px] md:text-[10px] font-bold uppercase tracking-[0.4em] opacity-40">Proposal Generator</h4>
                       <button 
-                        onClick={handleDownloadProposal}
+                        onClick={handleGenerateProposal}
                         className="flex items-center gap-2 px-4 py-2 glass rounded-full text-[10px] font-bold uppercase tracking-widest hover:bg-app-accent hover:text-app-bg transition-all"
                       >
-                        <Download size={14} />
-                        Download PDF
+                        <Sparkles size={14} />
+                        Generate Proposal
                       </button>
                     </div>
 
-                    <div id="proposal-template" className="bg-app-bg p-10 md:p-16 rounded-[40px] border border-app-border space-y-12 text-app-text shadow-2xl">
-                      {/* Proposal Header */}
-                      <div className="flex justify-between items-start border-b border-app-border pb-12">
-                        <div className="space-y-4">
-                          <h1 className="text-4xl font-light tracking-tighter">{companyProfile.name || 'LEADJIN'} <span className="text-app-accent">PROPOSAL</span></h1>
-                          <p className="text-[10px] font-mono uppercase tracking-[0.5em] opacity-40">Strategic Partnership Proposal</p>
-                        </div>
-                        <div className="text-right space-y-1">
-                          <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Date</p>
-                          <p className="text-sm font-light">{new Date().toLocaleDateString()}</p>
-                        </div>
+                    {proposalGenerated && (
+                      <div className="space-y-3 pt-2 border-t border-app-border/5">
+                        <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">{t.success}</p>
+                        <p className="text-[11px] text-app-accent truncate font-mono">{proposalGenerated}</p>
+                        <button
+                          onClick={() => window.open(proposalGenerated, '_blank')}
+                          className="flex items-center gap-2 px-4 py-2 bg-app-accent text-app-bg rounded-full text-[10px] font-bold uppercase tracking-widest hover:opacity-90 transition-opacity"
+                        >
+                          <ExternalLink size={14} />
+                          Open Proposal
+                        </button>
                       </div>
-
-                      {/* Client Info */}
-                      <div className="grid grid-cols-2 gap-12">
-                        <div className="space-y-4">
-                          <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Prepared For</p>
-                          <div className="space-y-1">
-                            <p className="text-xl font-light">{selectedLead.name}</p>
-                            <p className="text-sm opacity-60">{selectedLead.title}</p>
-                            <p className="text-sm opacity-60">{selectedLead.company}</p>
+                    )}
+                    {!proposalGenerated && (
+                      <div id="proposal-template" className="bg-app-bg p-10 md:p-16 rounded-[40px] border border-app-border space-y-12 text-app-text shadow-2xl">
+                        {/* Proposal Header */}
+                        <div className="flex justify-between items-start border-b border-app-border pb-12">
+                          <div className="space-y-4">
+                            <h1 className="text-4xl font-light tracking-tighter">{companyProfile.name || 'LEADJIN'} <span className="text-app-accent">PROPOSAL</span></h1>
+                            <p className="text-[10px] font-mono uppercase tracking-[0.5em] opacity-40">Strategic Partnership Proposal</p>
+                          </div>
+                          <div className="text-right space-y-1">
+                            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Date</p>
+                            <p className="text-sm font-light">{new Date().toLocaleDateString()}</p>
                           </div>
                         </div>
-                        <div className="space-y-4 text-right">
-                          <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Prepared By</p>
-                          <div className="space-y-1">
-                            <p className="text-xl font-light">{companyProfile.name || 'LEADJIN Engine'}</p>
-                            <p className="text-sm opacity-60">{companyProfile.tagline || 'Intelligence Division'}</p>
-                            {companyProfile.email && <p className="text-xs opacity-40">{companyProfile.email}</p>}
-                            {companyProfile.address && <p className="text-xs opacity-40">{companyProfile.address}</p>}
+
+                        {/* Client Info */}
+                        <div className="grid grid-cols-2 gap-12">
+                          <div className="space-y-4">
+                            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Prepared For</p>
+                            <div className="space-y-1">
+                              <p className="text-xl font-light">{selectedLead.name}</p>
+                              <p className="text-sm opacity-60">{selectedLead.title}</p>
+                              <p className="text-sm opacity-60">{selectedLead.company}</p>
+                            </div>
+                          </div>
+                          <div className="space-y-4 text-right">
+                            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Prepared By</p>
+                            <div className="space-y-1">
+                              <p className="text-xl font-light">{companyProfile.name || 'LEADJIN Engine'}</p>
+                              <p className="text-sm opacity-60">{companyProfile.tagline || 'Intelligence Division'}</p>
+                              {companyProfile.email && <p className="text-xs opacity-40">{companyProfile.email}</p>}
+                              {companyProfile.address && <p className="text-xs opacity-40">{companyProfile.address}</p>}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Executive Summary */}
-                      <div className="space-y-6">
-                        <h2 className="text-2xl font-light border-l-4 border-app-accent pl-6">Executive Summary</h2>
-                        <p className="text-sm leading-relaxed opacity-80">
-                          Based on our deep intelligence analysis of {selectedLead.company}, we have identified significant opportunities for growth in the {selectedLead.industry} sector. Our engine has detected specific pain signals related to your current digital presence and outreach strategy.
-                        </p>
-                      </div>
+                        {/* Executive Summary */}
+                        <div className="space-y-6">
+                          <h2 className="text-2xl font-light border-l-4 border-app-accent pl-6">Executive Summary</h2>
+                          <p className="text-sm leading-relaxed opacity-80">
+                            Based on our deep intelligence analysis of {selectedLead.company}, we have identified significant opportunities for growth in the {selectedLead.industry} sector. Our engine has detected specific pain signals related to your current digital presence and outreach strategy.
+                          </p>
+                        </div>
 
-                      {/* Pricing Table */}
-                      <div className="space-y-6">
-                        <h2 className="text-2xl font-light border-l-4 border-app-accent pl-6">Investment Strategy</h2>
-                        <div className="glass rounded-3xl overflow-hidden">
-                          <table className="w-full text-left text-sm">
-                            <thead className="bg-app-accent/10 border-b border-app-border">
-                              <tr>
-                                <th className="p-6 font-bold uppercase tracking-widest text-[10px]">Service Item</th>
-                                <th className="p-6 font-bold uppercase tracking-widest text-[10px] text-right">Investment</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-app-border">
-                              {quotationItems.map((item, idx) => (
-                                <tr key={idx}>
-                                  <td className="p-6">{item.label}</td>
-                                  <td className="p-6 text-right font-mono">SAR ${Number(item.amount).toLocaleString()}</td>
+                        {/* Pricing Table */}
+                        <div className="space-y-6">
+                          <h2 className="text-2xl font-light border-l-4 border-app-accent pl-6">Investment Strategy</h2>
+                          <div className="glass rounded-3xl overflow-hidden">
+                            <table className="w-full text-left text-sm">
+                              <thead className="bg-app-accent/10 border-b border-app-border">
+                                <tr>
+                                  <th className="p-6 font-bold uppercase tracking-widest text-[10px]">Service Item</th>
+                                  <th className="p-6 font-bold uppercase tracking-widest text-[10px] text-right">Investment</th>
                                 </tr>
-                              ))}
-                              <tr className="bg-app-accent/5">
-                                <td className="p-6 font-bold">Total Investment</td>
-                                <td className="p-6 text-right font-bold text-app-accent font-mono">
-                                  SAR ${quotationItems.reduce((s, i) => s + (Number(i.amount) || 0), 0).toLocaleString()}
-                                </td>
-                              </tr>
-                            </tbody>
-                          </table>
+                              </thead>
+                              <tbody className="divide-y divide-app-border">
+                                {quotationItems.map((item, idx) => (
+                                  <tr key={idx}>
+                                    <td className="p-6">{item.label}</td>
+                                    <td className="p-6 text-right font-mono">SAR ${Number(item.amount).toLocaleString()}</td>
+                                  </tr>
+                                ))}
+                                <tr className="bg-app-accent/5">
+                                  <td className="p-6 font-bold">Total Investment</td>
+                                  <td className="p-6 text-right font-bold text-app-accent font-mono">
+                                    SAR ${quotationItems.reduce((s, i) => s + (Number(i.amount) || 0), 0).toLocaleString()}
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
-                      </div>
 
-                      {/* Terms & Conditions */}
-                      <div className="space-y-4 opacity-40">
-                        <p className="text-[10px] font-bold uppercase tracking-widest">Terms & Conditions</p>
-                        <p className="text-[9px] leading-relaxed">
-                          This proposal is valid for 30 days. Services are provided on a month-to-month basis with a 30-day notice period for termination. All intelligence data remains the property of the client.
-                        </p>
-                      </div>
+                        {/* Terms & Conditions */}
+                        <div className="space-y-4 opacity-40">
+                          <p className="text-[10px] font-bold uppercase tracking-widest">Terms & Conditions</p>
+                          <p className="text-[9px] leading-relaxed">
+                            This proposal is valid for 30 days. Services are provided on a month-to-month basis with a 30-day notice period for termination. All intelligence data remains the property of the client.
+                          </p>
+                        </div>
 
-                      {/* E-Signature */}
-                      <div className="pt-12 border-t border-app-border flex justify-between items-end">
-                        <div className="space-y-8">
-                          <div className="w-64 border-b border-app-text/20 pb-2">
-                            <p className="text-[10px] font-mono opacity-20 italic">Signature Placeholder</p>
+                        {/* E-Signature */}
+                        <div className="pt-12 border-t border-app-border flex justify-between items-end">
+                          <div className="space-y-8">
+                            <div className="w-64 border-b border-app-text/20 pb-2">
+                              <p className="text-[10px] font-mono opacity-20 italic">Signature Placeholder</p>
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-sm font-light">{selectedLead.name}</p>
+                              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Authorized Signatory</p>
+                            </div>
                           </div>
-                          <div className="space-y-1">
-                            <p className="text-sm font-light">{selectedLead.name}</p>
-                            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Authorized Signatory</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="w-48 h-48 border border-dashed border-app-border rounded-2xl flex items-center justify-center opacity-20">
-                            <p className="text-[10px] uppercase tracking-widest">Company Seal</p>
+                          <div className="text-right">
+                            <div className="w-48 h-48 border border-dashed border-app-border rounded-2xl flex items-center justify-center opacity-20">
+                              <p className="text-[10px] uppercase tracking-widest">Company Seal</p>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 )}
 

@@ -88,6 +88,10 @@ function isProviderUnavailable(error: unknown): boolean {
 }
 
 function providerErrorResponse(res: any, error: unknown, message: string) {
+  // This function SENDS the reply (it is not a body builder), and it is passed as
+  // an argument at :4668/:5440 and used bare at :6520. Guard it here so a reply
+  // already sent by the handler or by any wrapper cannot raise ERR_HTTP_HEADERS_SENT.
+  if (res.headersSent || res.writableEnded) return;
   if (isProviderUnavailable(error)) {
     return res.status(503).json({ error: 'AI provider unavailable', message });
   }
@@ -398,12 +402,48 @@ app.use(cors({
 
 app.use(express.json());
 
+// Long-by-design routes: SSE streams and the discovery harvest (stage-by-stage
+// Places + contact harvest + SMTP probes routinely exceed the 120 s cap). They
+// keep their own stage timeouts; the global cap would answer 504 mid-run and the
+// handler's later res.json would raise ERR_HTTP_HEADERS_SENT.
+const LONG_ROUTE_PATTERNS = [
+  /^\/api\/jin\/hunt\/stream$/,
+  /^\/api\/leads\/harvest$/,
+  /^\/api\/leads\/enrich(\/bulk|-v2(\/bulk)?)?$/,
+  /^\/api\/leads\/upload-csv\/confirm$/,
+  /^\/api\/verify-lead$/,
+  /^\/api\/hunt$/,
+  /^\/api\/hunt-orchestrate$/,
+  /^\/api\/craft-outreach$/,
+  /^\/api\/quotations\/suggest-price$/,
+  /^\/api\/lead-score\/.+$/,
+  /^\/api\/classify-reply$/,
+  /^\/api\/service\/jin\//,
+  // Medium-risk routes from the double-reply audit (risk class B): network/AI
+  // work that can outlast the 120 s cap, so the global 504 must not pre-empt them.
+  /^\/api\/leads\/enrich-waterfall$/,
+  /^\/api\/leads\/upload-csv$/,
+  /^\/api\/leads\/verify-website$/,
+  /^\/api\/leads\/enrich-linkedin$/,
+  /^\/api\/wathq\/[^\/]+$/,
+  /^\/api\/hunt-wathq$/,
+  /^\/api\/auth\/google\/callback$/,
+  /^\/api\/auth\/google\/test$/,
+  /^\/api\/proposals\/generate$/,
+  /^\/api\/whatsapp\/send$/,
+  /^\/api\/signals\/detect$/,
+];
+
 // ── Global request timeout ────────────────────────────────────────────────────
 // Bounds every request. SSE streams are explicitly exempt because they are
 // designed to stay open; all other routes get a 504 if they exceed the cap.
 const REQUEST_TIMEOUT_MS = Math.max(1000, parseInt(process.env.LEADJIN_REQUEST_TIMEOUT_MS || '', 10) || 120000);
 app.use((req, res, next) => {
-  if (/\/api\/jin\/hunt\/stream/.test(req.path)) return next();
+  // Long-by-design routes: SSE streams and the discovery harvest (stage-by-stage
+  // Places + contact harvest + SMTP probes routinely exceed the 120 s cap). They
+  // keep their own stage timeouts; the global cap would answer 504 mid-run and
+  // the handler's later res.json would raise ERR_HTTP_HEADERS_SENT.
+  if (LONG_ROUTE_PATTERNS.some((re) => re.test(req.path))) return next();
   const timer = setTimeout(() => {
     if (res.headersSent || res.writableEnded) {
       (res as any).destroy?.();
@@ -416,6 +456,21 @@ app.use((req, res, next) => {
   res.once('close', clearTimer);
   next();
 });
+
+/** Reply helper: a route may have been answered by the timeout middleware (or by a
+ *  second code path) before the handler finishes. Never throw ERR_HTTP_HEADERS_SENT. */
+const replyOnce = (res: express.Response) => (status: number, body: unknown) => {
+  if (res.headersSent || res.writableEnded) return;
+  res.status(status).json(body);
+};
+
+/** Same guard, but for handlers that must keep `res.send` semantics (the OAuth
+ *  popup HTML page and the raw PNG tracking pixel). `res.json` would change the
+ *  content type and body encoding of those replies. */
+const replyOnceSend = (res: express.Response) => (status: number, body: unknown) => {
+  if (res.headersSent || res.writableEnded) return;
+  res.status(status).send(body as any);
+};
 
 // Fixed concurrency ceiling for the bulk-enrichment worker pool. Client input
 // is clamped; it can never create more workers than this cap.
@@ -663,9 +718,9 @@ app.post('/api/service/jin/hunt.start', requireServiceScope('jin:drive'), async 
       { sector: String(sector).trim(), geo: String(geo).trim(), count: typeof count === 'number' ? count : 3 },
       { fetchWathqLead, enrichContact: (await import('./src/services/contactEnrichment.js')).enrichContact, db },
     );
-    res.json({ success: true, result });
+    replyOnce(res)(200, { success: true, result });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Hunt start failed' });
+    replyOnce(res)(500, { error: error.message || 'Hunt start failed' });
   }
 });
 
@@ -678,14 +733,18 @@ app.get('/api/service/jin/hunt.status', requireServiceScope('jin:drive'), async 
   let errored = 0;
   let currentRunId: string | null = null;
   let eventCount = 0;
+  // The shared hunt bus has no terminal event, so a quiet hunt would hold this
+  // request open past the global request cap and reply after it. Bound the drain.
+  const drainDeadline = Date.now() + 5_000;
   for await (const event of bus) {
     if (eventCount >= 128) break;
+    if (Date.now() > drainDeadline) break;
     eventCount++;
     if (event.kind === 'start') { started++; currentRunId = event.runId; }
     if (event.kind === 'done') { done++; }
     if (event.kind === 'error') { errored++; }
   }
-  res.json({
+  replyOnce(res)(200, {
     status: 'ok',
     runId: currentRunId,
     started,
@@ -712,9 +771,9 @@ app.post('/api/service/jin/lead.verify', requireServiceScope('jin:drive'), async
     if (domain && companyName) {
       results.location = await verifyRegionalHQ(String(domain), String(companyName), String(claimedLocation || ''));
     }
-    res.json({ success: true, results });
+    replyOnce(res)(200, { success: true, results });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Lead verification failed' });
+    replyOnce(res)(500, { error: error.message || 'Lead verification failed' });
   }
 });
 
@@ -1595,9 +1654,12 @@ app.get("/api/user/profile", (req, res) => {
 app.put("/api/user/profile", (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  const { company_name, company_tagline, company_email, company_phone, company_website, company_address, company_logo } = req.body;
-  db.prepare("UPDATE users SET company_name=?, company_tagline=?, company_email=?, company_phone=?, company_website=?, company_address=?, company_logo=? WHERE id=?")
-    .run(company_name, company_tagline, company_email, company_phone, company_website, company_address, company_logo, user.id);
+  const fields = ["company_name", "company_tagline", "company_email", "company_phone", "company_website", "company_address", "company_logo"] as const;
+  const present = fields.filter((k) => Object.prototype.hasOwnProperty.call(req.body, k) && req.body[k as keyof typeof fields] !== undefined);
+  if (present.length === 0) return res.json({ saved: true });
+  const setClause = present.map((k) => `${k} = ?`).join(", ");
+  const params = present.map((k) => (req.body as any)[k]);
+  db.prepare(`UPDATE users SET ${setClause} WHERE id = ?`).run(...params, user.id);
   res.json({ saved: true });
 });
 
@@ -1621,7 +1683,7 @@ app.put("/api/user/preferences", (req, res) => {
   try { prefs = JSON.parse(existing?.preferences || '{}'); } catch (e: unknown) { console.error('[Preferences] Failed to parse stored preferences:', (e as Error).message); }
   const merged = { ...prefs, ...req.body };
   db.prepare("UPDATE users SET preferences = ? WHERE id = ?").run(JSON.stringify(merged), user.id);
-  res.json({ saved: true });
+  replyOnce(res)(200, { saved: true });
 });
 
 // --- In-Memory Session Cache ---
@@ -2608,8 +2670,8 @@ app.post("/api/leads/harvest", async (req, res) => {
 
     // Persist leads to database for background verification and CRM
     const insertLead = db.prepare(`INSERT OR IGNORE INTO leads
-      (lead_id, user_id, name, title, company, industry, email, phone, linkedin, twitter, website, lead_score, email_source, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      (lead_id, user_id, name, title, company, industry, email, phone, linkedin, twitter, website, lead_score, email_source, vision_2030_program, majlis_tips, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
     const insertLeads = db.transaction(() => {
       const now = new Date().toISOString();
@@ -2618,15 +2680,29 @@ app.post("/api/leads/harvest", async (req, res) => {
           lead.lead_id, user.id, lead.name, lead.title, lead.company,
           lead.industry || "", lead.email || "", lead.phone || "",
           lead.linkedin || "", lead.twitter || "", lead.website || "",
-          lead.lead_score || 0, lead.email_source || (lead.email ? "precrawl" : ""), now
+          lead.lead_score || 0, lead.email_source || (lead.email ? "precrawl" : ""), lead.vision_2030_alignment?.program ?? null, Array.isArray(lead.majlis_tips) && lead.majlis_tips.length ? JSON.stringify(lead.majlis_tips) : null, now
         );
       }
     });
 
     try { insertLeads(); } catch (e: any) { console.warn('[Harvest] Lead persistence failed:', (e as Error).message); }
 
+    // Fire-and-forget per-lead cultural suggestion enrichment (background).
+    // Never blocks the harvest response.
+    setImmediate(() => {
+      import('./src/services/suggestionEnrich.js').then((m) =>
+        m.enrichLeadSuggestions(db, user.id, leads, {
+          vision2030: searchParams.vision2030,
+          majlisMode: searchParams.majlisMode,
+          targetIndustry: searchParams.targetIndustry,
+        })
+      ).then((r) => {
+        if (r.errors.length) console.log('[Harvest] suggestion enrich:', r.errors.join('; '));
+      }).catch((e) => console.log('[Harvest] suggestion enrich failed:', e?.message));
+    });
+
     // Return leads immediately - email enrichment happens separately via /api/leads/enrich
-    res.json({ leads, usingPersonalKey, source, engines_used, errors: run.errors, job_id: jobId });
+    if (!res.headersSent) res.json({ leads, usingPersonalKey, source, engines_used, errors: run.errors, job_id: jobId });
 
     // Fire-and-forget background verification for harvested leads
     setImmediate(async () => {
@@ -2659,6 +2735,7 @@ app.post("/api/leads/harvest", async (req, res) => {
       leads_count: 0,
     });
     pruneHarvestJobs();
+    if (res.headersSent) return;
     res.status(200).json({
       leads: [],
       usingPersonalKey,
@@ -2741,7 +2818,7 @@ app.post("/api/leads/enrich", async (req, res) => {
           if (!founderUser) {
             debitEnrichmentCredits(user.id, 1, 'email_enrichment', `Email enrichment for ${lead.name} at ${lead.company}`, lead.lead_id);
           }
-          return res.json({
+          return replyOnce(res)(200, {
             lead_id: lead.lead_id,
             email: waterfallResult.email.value,
             email_verified: waterfallResult.email.verified,
@@ -2760,14 +2837,14 @@ app.post("/api/leads/enrich", async (req, res) => {
       debitEnrichmentCredits(user.id, 1, 'email_enrichment', `Email enrichment for ${lead.name} at ${lead.company}`, lead.lead_id);
       debited = true;
     }
-    res.json({ lead_id: lead.lead_id, email: result.email, email_verified: result.verified, email_source: result.source });
+    replyOnce(res)(200, { lead_id: lead.lead_id, email: result.email, email_verified: result.verified, email_source: result.source });
   } catch (err: any) {
     // Refund any credits debited during this failed enrichment run; a run that
     // charged nothing (founder or miss) must never be reversed.
     if (debited) {
       refundEnrichmentCredits(user.id, 1, 'email_enrichment', `Email enrichment for ${lead.name} at ${lead.company}`, lead.lead_id);
     }
-    res.json({ lead_id: lead.lead_id, email: null, email_verified: false, email_source: 'error' });
+    replyOnce(res)(500, { lead_id: lead.lead_id, email: null, email_verified: false, email_source: 'error' });
   }
 });
 
@@ -2777,7 +2854,7 @@ app.post("/api/leads/enrich-waterfall", async (req, res) => {
   if (!user) return;
 
   const { lead_id, name, company, domain } = req.body;
-  if (!name || !company) return res.status(400).json({ error: "name and company required" });
+  if (!name || !company) return replyOnce(res)(400, { error: "name and company required" });
 
   const freshUser = db.prepare("SELECT email, is_founder FROM users WHERE id = ?").get(user.id) as any;
   const founderUser = freshUser?.is_founder || isFounder(freshUser?.email || '');
@@ -2786,14 +2863,14 @@ app.post("/api/leads/enrich-waterfall", async (req, res) => {
   if (!founderUser) {
     const creditCheck = checkEnrichmentCredits(user.id, 1);
     if (!creditCheck.hasCredits) {
-      return res.status(402).json({ error: "Insufficient enrichment credits", balance: creditCheck.balance, needed: 1 });
+      return replyOnce(res)(402, { error: "Insufficient enrichment credits", balance: creditCheck.balance, needed: 1 });
     }
   }
 
   try {
     const result = await waterfallEnrichment.enrichContact({ name, company, domain });
     if (!result) {
-      return res.json({ success: false });
+      return replyOnce(res)(200, { success: false });
     }
 
     // Debit credits based on what was found (charge only on success)
@@ -2816,7 +2893,7 @@ app.post("/api/leads/enrich-waterfall", async (req, res) => {
       }
     }
 
-    res.json({
+    replyOnce(res)(200, {
       success: true,
       email: result.email?.value ?? null,
       phone: result.phone?.value ?? null,
@@ -2825,7 +2902,7 @@ app.post("/api/leads/enrich-waterfall", async (req, res) => {
     });
   } catch (err: any) {
     console.error('[enrich-waterfall]', err.message);
-    res.status(500).json({ success: false, error: "internal server error" });
+    replyOnce(res)(500, { success: false, error: "internal server error" });
   }
 });
 
@@ -2894,10 +2971,10 @@ app.post("/api/leads/enrich-bulk", async (req, res) => {
         };
       }
     });
-    res.json({ results, stats: { total: leads.length, enriched, failed, concurrency: poolSize, maxConcurrency: BULK_ENRICH_MAX_CONCURRENCY } });
+    replyOnce(res)(200, { results, stats: { total: leads.length, enriched, failed, concurrency: poolSize, maxConcurrency: BULK_ENRICH_MAX_CONCURRENCY } });
   } catch (err: any) {
     console.error('[enrich-bulk]', err.message);
-    res.status(500).json({ error: "internal server error" });
+    replyOnce(res)(500, { error: "internal server error" });
   }
 });
 
@@ -2940,10 +3017,10 @@ app.post("/api/leads/enrich-v2", async (req, res) => {
       }
     }
 
-    res.json(result);
+    replyOnce(res)(200, result);
   } catch (err: any) {
     console.error('[enrich-v2]', err.message);
-    res.status(500).json({ error: "internal server error" });
+    replyOnce(res)(500, { error: "internal server error" });
   }
 });
 
@@ -2968,10 +3045,10 @@ app.post("/api/leads/enrich-v2/bulk", async (req, res) => {
     }));
 
     const results = await enrichBatch(inputs, 3);
-    res.json({ results, total: results.length });
+    replyOnce(res)(200, { results, total: results.length });
   } catch (err: any) {
     console.error('[enrich-v2/bulk]', err.message);
-    res.status(500).json({ error: "internal server error" });
+    replyOnce(res)(500, { error: "internal server error" });
   }
 });
 
@@ -3140,10 +3217,10 @@ app.get("/api/precrawl/harvest", (req, res) => {
       no_email: rows.filter((r: any) => !r.email).length,
     };
 
-    res.json({ people: rows.slice(0, limit), companies: companyRows, stats, filters: { industry, city, country, limit } });
+    replyOnce(res)(200, { people: rows.slice(0, limit), companies: companyRows, stats, filters: { industry, city, country, limit } });
   } catch (err: any) {
     console.error('[PreCrawl Harvest] Query error:', err.message);
-    res.status(500).json({ error: 'Query failed' });
+    replyOnce(res)(500, { error: 'Query failed' });
   }
 });
 
@@ -3278,7 +3355,7 @@ app.post("/api/leads/upload-csv", async (req, res) => {
 
   const contentType = req.headers['content-type'] || '';
   if (!contentType.includes('multipart/form-data')) {
-    return res.status(400).json({ error: 'Request must be multipart/form-data' });
+    return replyOnce(res)(400, { error: 'Request must be multipart/form-data' });
   }
 
   // Read raw body
@@ -3293,7 +3370,7 @@ app.post("/api/leads/upload-csv", async (req, res) => {
 
   req.on('error', (err) => {
     console.error('[upload-csv] stream error:', err.message);
-    if (!res.headersSent) res.status(400).json({ error: 'File too large (max 10 MB)' });
+    if (!res.headersSent) replyOnce(res)(400, { error: 'File too large (max 10 MB)' });
   });
 
   req.on('end', () => {
@@ -3301,17 +3378,17 @@ app.post("/api/leads/upload-csv", async (req, res) => {
       const rawBody = Buffer.concat(chunks);
       const file = parseMultipartFile(rawBody, contentType);
       if (!file) {
-        return res.status(400).json({ error: 'No file found in upload' });
+        return replyOnce(res)(400, { error: 'No file found in upload' });
       }
 
       const csvText = file.buffer.toString('utf-8');
       const { headers, rows } = parseCsvText(csvText);
 
       if (rows.length === 0) {
-        return res.status(400).json({ error: 'CSV is empty or has no data rows' });
+        return replyOnce(res)(400, { error: 'CSV is empty or has no data rows' });
       }
       if (rows.length > 10_000) {
-        return res.status(400).json({ error: 'CSV exceeds 10,000 row limit' });
+        return replyOnce(res)(400, { error: 'CSV exceeds 10,000 row limit' });
       }
 
       const detectedMapping = detectColumnMapping(headers);
@@ -3322,14 +3399,14 @@ app.post("/api/leads/upload-csv", async (req, res) => {
 
       const sample = rows.slice(0, 5).map(row => mapRowToLead(row, detectedMapping));
 
-      res.json({
+      replyOnce(res)(200, {
         parsed: { total: rows.length, sample },
         columns: { detected: detectedMapping, available: headers },
         uploadId,
       });
     } catch (err: any) {
       console.error('[upload-csv]', err.message);
-      if (!res.headersSent) res.status(500).json({ error: "internal server error" });
+      if (!res.headersSent) replyOnce(res)(500, { error: "internal server error" });
     }
   });
 });
@@ -3464,7 +3541,7 @@ app.post("/api/leads/upload-csv/confirm", async (req, res) => {
   // Clean up temp storage
   csvUploadStore.delete(uploadId);
 
-  res.json({ imported, enriched: enrichedCount, failed });
+  replyOnce(res)(200, { imported, enriched: enrichedCount, failed });
 });
 
 // --- Enrichment: Active providers ---
@@ -3491,7 +3568,7 @@ app.post("/api/leads/verify-website", async (req, res) => {
 
   const { lead_id, website } = req.body;
   if (!lead_id || !website) {
-    return res.status(400).json({ error: "lead_id and website required" });
+    return replyOnce(res)(400, { error: "lead_id and website required" });
   }
 
   try {
@@ -3501,14 +3578,14 @@ app.post("/api/leads/verify-website", async (req, res) => {
     db.prepare("UPDATE leads SET website_verified = ?, website_status = ? WHERE lead_id = ? AND user_id = ?")
       .run(result.reachable ? 1 : 0, result.status, lead_id, user.id);
 
-    res.json({
+    replyOnce(res)(200, {
       lead_id,
       website_verified: result.reachable,
       website_status: result.status,
       final_url: result.finalUrl
     });
   } catch (err: any) {
-    res.status(500).json({ error: "internal server error" });
+    replyOnce(res)(500, { error: "internal server error" });
   }
 });
 
@@ -3525,10 +3602,10 @@ app.post("/api/verify-lead", async (req, res) => {
 
   try {
     const result = await tripleVerify({ email, phone, linkedinUrl, name, company });
-    res.json(result);
+    replyOnce(res)(200, result);
   } catch (err: any) {
     console.error("[SovereignVerifier] Error:", err.message);
-    res.status(500).json({ error: "internal server error" });
+    replyOnce(res)(500, { error: "internal server error" });
   }
 });
 
@@ -3545,7 +3622,7 @@ app.post("/api/leads/enrich-linkedin", async (req, res) => {
 
   const { lead_id, name, company } = req.body;
   if (!lead_id || !name || !company) {
-    return res.status(400).json({ error: "lead_id, name, and company required" });
+    return replyOnce(res)(400, { error: "lead_id, name, and company required" });
   }
 
   try {
@@ -3557,12 +3634,12 @@ app.post("/api/leads/enrich-linkedin", async (req, res) => {
         .run(linkedinUrl, lead_id, user.id);
     }
 
-    res.json({
+    replyOnce(res)(200, {
       lead_id,
       linkedin: linkedinUrl
     });
   } catch (err: any) {
-    res.status(500).json({ error: "internal server error" });
+    replyOnce(res)(500, { error: "internal server error" });
   }
 });
 
@@ -3614,10 +3691,10 @@ app.post("/api/hunt", async (req, res) => {
 
   try {
     const result = await huntExecutives(domain, linkedinCookie, maxExecutives || 3);
-    res.json(result);
+    replyOnce(res)(200, result);
   } catch (error: any) {
     console.error(`[API/Hunt] Hunt failed for ${domain}:`, error.message);
-    res.status(500).json({
+    replyOnce(res)(500, {
       error: "Strategic entity discovery failed",
       // F-27: error detail intentionally omitted from response
       domain,
@@ -3632,22 +3709,22 @@ app.post("/api/hunt", async (req, res) => {
 // D11: national IDs are never returned.
 app.get("/api/wathq/:cr", async (req, res) => {
   const user = getUserFromTokenCached(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
+  if (!user) return replyOnce(res)(401, { error: 'Authentication required' });
   const { cr } = req.params;
   const lang = (req.query.lang === 'ar' || req.query.lang === 'en') ? req.query.lang : 'en';
 
   if (!cr || !/^\d{10}$/.test(cr)) {
-    return res.status(400).json({ error: "cr must be a 10-digit Saudi CR number" });
+    return replyOnce(res)(400, { error: "cr must be a 10-digit Saudi CR number" });
   }
 
   console.log(`[API/WATHQ] Registry lookup requested for CR: ${cr}`);
 
   try {
     const lead = await fetchWathqLead(cr, lang);
-    res.json(lead);
+    replyOnce(res)(200, lead);
   } catch (error: any) {
     console.error(`[API/WATHQ] Lookup failed for CR ${cr}:`, error.message);
-    res.status(error.status || 500).json({
+    replyOnce(res)(error.status || 500, {
       error: "WATHQ registry lookup failed",
       // F-27: error detail intentionally omitted from response
       cr,
@@ -3657,25 +3734,25 @@ app.get("/api/wathq/:cr", async (req, res) => {
 
 app.post("/api/hunt-wathq", async (req, res) => {
   const user = getUserFromTokenCached(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
+  if (!user) return replyOnce(res)(401, { error: 'Authentication required' });
   const { cr, lang } = req.body;
   const resolvedLang = (lang === 'ar' || lang === 'en') ? lang : 'en';
 
   if (!cr || typeof cr !== 'string') {
-    return res.status(400).json({ error: "cr is required (10-digit Saudi CR number)" });
+    return replyOnce(res)(400, { error: "cr is required (10-digit Saudi CR number)" });
   }
   if (!/^\d{10}$/.test(cr)) {
-    return res.status(400).json({ error: "cr must be a 10-digit Saudi CR number" });
+    return replyOnce(res)(400, { error: "cr must be a 10-digit Saudi CR number" });
   }
 
   console.log(`[API/hunt-wathq] Registry lookup requested for CR: ${cr}`);
 
   try {
     const lead = await fetchWathqLead(cr, resolvedLang);
-    res.json(lead);
+    replyOnce(res)(200, lead);
   } catch (error: any) {
     console.error(`[API/hunt-wathq] Lookup failed for CR ${cr}:`, error.message);
-    res.status(error.status || 500).json({
+    replyOnce(res)(error.status || 500, {
       error: "WATHQ registry lookup failed",
       // F-27: error detail intentionally omitted from response
       cr,
@@ -3750,10 +3827,10 @@ app.post("/api/hunt-orchestrate", async (req, res) => {
     (result as any).engines_attempted = [];
     if (process.env.GOOGLE_PLACES_API_KEY) (result as any).engines_attempted.push("places");
     (result as any).engines_attempted.push("model");
-    res.json(result);
+    replyOnce(res)(200, result);
   } catch (error: any) {
     console.error(`[API/hunt-orchestrate] Unexpected error:`, error.message);
-    res.status(500).json({
+    replyOnce(res)(500, {
       error: "Hunt orchestration failed",
       // F-27: error detail intentionally omitted from response
     });
@@ -3772,9 +3849,9 @@ app.get("/api/templates", (req, res) => {
       WHERE user_id = ? OR user_id IS NULL
       ORDER BY user_id DESC, created_at DESC
     `).all(user.id);
-    res.json(templates);
+    replyOnce(res)(200, templates);
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch templates" });
+    replyOnce(res)(500, { error: "Failed to fetch templates" });
   }
 });
 
@@ -3783,16 +3860,16 @@ app.post("/api/templates", (req, res) => {
   if (!user) return;
   const { name, subject, body } = req.body;
   if (!name || !subject || !body) {
-    return res.status(400).json({ error: "name, subject, and body are required" });
+    return replyOnce(res)(400, { error: "name, subject, and body are required" });
   }
   try {
     const info = db.prepare("INSERT INTO email_templates (user_id, name, subject, body) VALUES (?, ?, ?, ?)").run(user.id, name, subject, body);
-    res.json({ id: info.lastInsertRowid, name, subject, body });
+    replyOnce(res)(200, { id: info.lastInsertRowid, name, subject, body });
   } catch (error: any) {
     if (error.message?.includes('UNIQUE constraint failed')) {
-      return res.status(409).json({ error: "Template name already exists" });
+      return replyOnce(res)(409, { error: "Template name already exists" });
     }
-    res.status(500).json({ error: "Failed to create template" });
+    replyOnce(res)(500, { error: "Failed to create template" });
   }
 });
 
@@ -3802,10 +3879,10 @@ app.put("/api/templates/:id", (req, res) => {
   const { name, subject, body } = req.body;
   try {
     const result = db.prepare("UPDATE email_templates SET name = ?, subject = ?, body = ? WHERE id = ? AND user_id = ?").run(name, subject, body, req.params.id, user.id);
-    if (result.changes === 0) return res.status(404).json({ error: "Template not found" });
-    res.json({ success: true });
+    if (result.changes === 0) return replyOnce(res)(404, { error: "Template not found" });
+    replyOnce(res)(200, { success: true });
   } catch (error) {
-    res.status(500).json({ error: "Failed to update template" });
+    replyOnce(res)(500, { error: "Failed to update template" });
   }
 });
 
@@ -3814,10 +3891,10 @@ app.delete("/api/templates/:id", (req, res) => {
   if (!user) return;
   try {
     const result = db.prepare("DELETE FROM email_templates WHERE id = ? AND user_id = ?").run(req.params.id, user.id);
-    if (result.changes === 0) return res.status(404).json({ error: "Template not found" });
-    res.json({ success: true });
+    if (result.changes === 0) return replyOnce(res)(404, { error: "Template not found" });
+    replyOnce(res)(200, { success: true });
   } catch (error) {
-    res.status(500).json({ error: "Failed to delete template" });
+    replyOnce(res)(500, { error: "Failed to delete template" });
   }
 });
 
@@ -4182,8 +4259,13 @@ app.get("/api/auth/google", (req, res) => {
 });
 
 app.get("/api/auth/google/callback", async (req, res) => {
-  if (!process.env.GOOGLE_CLIENT_ID) return res.status(503).send("Google OAuth not configured");
+  if (!process.env.GOOGLE_CLIENT_ID) return replyOnceSend(res)(503, "Google OAuth not configured");
   const { code } = req.query;
+  // A callback reached without a code is a caller error, not an auth failure:
+  // getToken(undefined) throws and the catch would answer 500.
+  if (!code || typeof code !== 'string') {
+    return replyOnceSend(res)(400, "Missing OAuth code — restart the Google sign-in from the app.");
+  }
 
   const tempClient = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -4247,7 +4329,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
       .replace(/>/g, '\\u003e')
       .replace(/&/g, '\\u0026');
 
-    res.send(`
+    replyOnceSend(res)(200, `
       <html>
         <body>
           <script>
@@ -4268,7 +4350,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
     `);
   } catch (error) {
     console.error("Google Auth Error:", error);
-    res.status(500).send("Authentication failed.");
+    replyOnceSend(res)(500, "Authentication failed.");
   }
 });
 
@@ -4287,12 +4369,12 @@ app.post("/api/auth/google/test", async (req: express.Request, res: express.Resp
   const user = requireAuth(req, res);
   if (!user) return;
   try {
-    if (!process.env.GOOGLE_CLIENT_ID) return res.status(503).json({ error: "Google OAuth not configured" });
+    if (!process.env.GOOGLE_CLIENT_ID) return replyOnce(res)(503, { error: "Google OAuth not configured" });
     const tokens = db.prepare("SELECT * FROM google_tokens WHERE user_id = ?").get(user.id) as any;
-    if (!tokens) return res.status(401).json({ error: "Not connected" });
+    if (!tokens) return replyOnce(res)(401, { error: "Not connected" });
 
     const oauth2Client = getOAuth2Client(user.id);
-    if (!oauth2Client) return res.status(503).json({ error: "Google OAuth not configured" });
+    if (!oauth2Client) return replyOnce(res)(503, { error: "Google OAuth not configured" });
 
     oauth2Client.setCredentials({
       access_token: tokens.access_token,
@@ -4308,7 +4390,7 @@ app.post("/api/auth/google/test", async (req: express.Request, res: express.Resp
       db.prepare("INSERT INTO activity_log (lead_id, user_id, type, description) VALUES (?, ?, 'EMAIL_SUPPRESSED', ?)").run(
         null, user.id, `Suppressed connection-test email (${gate.reason}): ${tokens.user_email}`
       );
-      return res.status(403).json({ error: 'Address is suppressed', reason: gate.reason });
+      return replyOnce(res)(403, { error: 'Address is suppressed', reason: gate.reason });
     }
 
     // Send a test email to the user themselves
@@ -4337,10 +4419,10 @@ app.post("/api/auth/google/test", async (req: express.Request, res: express.Resp
       requestBody: { raw: encodedMessage },
     });
 
-    res.json({ status: "ok" });
+    replyOnce(res)(200, { status: "ok" });
   } catch (error) {
     console.error("Test Email Error:", error);
-    res.status(500).json({ error: "Failed to send test email" });
+    replyOnce(res)(500, { error: "Failed to send test email" });
   }
 });
 
@@ -4610,10 +4692,10 @@ app.post("/api/craft-outreach", async (req, res) => {
 
   try {
     const result = await craftOutreach(lead, enrichedContext, apiKey);
-    res.json(result);
+    replyOnce(res)(200, result);
   } catch (error: any) {
     console.error('[VisionStrategist] Route error:', error.message);
-    return providerErrorResponse(res, error, "Failed to craft outreach");
+    return replyOnce(res)(500, providerErrorResponse(res, error, "Failed to craft outreach"));
   }
 });
 
@@ -4692,13 +4774,13 @@ app.get("/api/unsubscribe", (req, res) => {
   const { email, token } = req.query;
 
   if (!email || !token) {
-    return res.status(400).json({ error: "Email and token are required" });
+    return replyOnce(res)(400, { error: "Email and token are required" });
   }
 
   // Verify HMAC-based unsubscribe token
   const expectedToken = createHmac('sha256', process.env.LEADJIN_ADMIN_SECRET || 'leadjin-unsubscribe-fallback').update(email as string).digest('hex').slice(0, 16);
   if (token !== expectedToken) {
-    return res.status(400).json({ error: "Invalid unsubscribe link" });
+    return replyOnce(res)(400, { error: "Invalid unsubscribe link" });
   }
 
   // Mark all pending emails for this address as cancelled and set do_not_contact
@@ -4707,9 +4789,9 @@ app.get("/api/unsubscribe", (req, res) => {
     db.prepare("UPDATE leads SET do_not_contact = 1 WHERE email = ?").run(email);
     // Suppression is address-keyed: this also blocks a future address with no lead row.
     suppress(db, email as string, 'unsubscribed', 'unsubscribe_get');
-    res.json({ status: "ok", message: "You have been unsubscribed from future emails." });
+    replyOnce(res)(200, { status: "ok", message: "You have been unsubscribed from future emails." });
   } catch (error: any) {
-    res.status(500).json({ error: "Failed to process unsubscribe request" });
+    replyOnce(res)(500, { error: "Failed to process unsubscribe request" });
   }
 });
 
@@ -4881,6 +4963,78 @@ app.post("/api/proposals", (req, res) => {
   res.json({ id: info.lastInsertRowid, saved: true });
 });
 
+// POST /api/proposals/generate — build a proposal from a lead and render PDF + DOCX.
+// The row is saved as DRAFT; nothing is sent from here.
+app.post("/api/proposals/generate", async (req, res) => {
+  const user = requireAuth(req, res) as any;
+  if (!user) return;
+  const { lead_id, locale } = req.body || {};
+  if (!lead_id) return replyOnce(res)(400, { error: "lead_id required" });
+
+  const lead = db.prepare("SELECT * FROM leads WHERE lead_id = ? AND user_id = ?").get(lead_id, user.id) as any;
+  if (!lead) return replyOnce(res)(404, { error: "lead not found" });
+
+  // Caller's company profile (brand block) - only the fields the caller set.
+  const company = db.prepare("SELECT company_name, company_tagline, company_email, company_phone, company_website, company_address, company_logo FROM users WHERE id = ?").get(user.id) as any;
+  const brand: { name?: string; tagline?: string; email?: string; phone?: string; website?: string; address?: string; logo?: string } = {};
+  if (company.company_name) brand.name = company.company_name;
+  if (company.company_tagline) brand.tagline = company.company_tagline;
+  if (company.company_email) brand.email = company.company_email;
+  if (company.company_phone) brand.phone = company.company_phone;
+  if (company.company_website) brand.website = company.company_website;
+  if (company.company_address) brand.address = company.company_address;
+  if (company.company_logo) brand.logo = company.company_logo;
+
+  // Vision 2030 program and majlis tips, normalised for the renderer.
+  const vision2030 = lead.vision_2030_program || undefined;
+  let majlisTips: string[] | undefined;
+  if (lead.majlis_tips) {
+    try {
+      const parsed = JSON.parse(lead.majlis_tips as string);
+      if (Array.isArray(parsed)) majlisTips = parsed as string[];
+    } catch {
+      // leave majlisTips undefined when the value is not a JSON array
+    }
+  }
+
+  try {
+    const mod = await import("./src/services/proposalRenderer.js");
+    const content = mod.buildProposalContent({
+      lead: {
+        lead_id: lead.lead_id,
+        name: lead.name,
+        title: lead.title,
+        company: lead.company,
+        industry: lead.industry,
+        website: lead.website,
+        email: lead.email,
+        phone: lead.phone,
+      },
+      operator: { name: user.name || user.email, email: user.email, service: "LeadJin" },
+      locale: locale === "ar" ? "ar" : "en",
+      brand,
+      vision2030,
+      majlisTips,
+    });
+
+    const info = db
+      .prepare("INSERT INTO proposals (user_id, lead_id, title, content, status) VALUES (?,?,?,?,?)")
+      .run(user.id, lead_id, content.title, JSON.stringify(content), "DRAFT");
+
+    const files = await mod.writeProposalFiles(content, lead, { stem: `proposal-${info.lastInsertRowid}` });
+    replyOnce(res)(200, {
+      id: info.lastInsertRowid,
+      title: content.title,
+      draft: true,
+      agent_brief: { internal: true, vision2030, majlisTips, lead },
+      files,
+    });
+  } catch (e: any) {
+    console.error("[Proposals] generate failed:", e?.message ?? String(e));
+    replyOnce(res)(500, { error: "proposal generation failed", detail: e?.message ?? String(e) });
+  }
+});
+
 // PUT /api/proposals/:id
 app.put("/api/proposals/:id", (req, res) => {
   const user = requireAuth(req, res) as any;
@@ -4952,7 +5106,7 @@ app.post("/api/test/seed", (req, res) => {
   ).get(user.id) as { cnt: number };
 
   if (existingLeads.cnt > 0) {
-    return res.json({ status: "already_seeded", message: "Leads already exist, no re-seed." });
+    return replyOnce(res)(200, { status: "already_seeded", message: "Leads already exist, no re-seed." });
   }
 
   // In production, only founders can seed
@@ -4960,7 +5114,7 @@ app.post("/api/test/seed", (req, res) => {
   const isFounder = user.email?.toLowerCase() === FOUNDER_EMAIL.toLowerCase();
 
   if (process.env.NODE_ENV === 'production' && !isFounder) {
-    return res.status(403).json({ error: "Only founder can seed in production" });
+    return replyOnce(res)(403, { error: "Only founder can seed in production" });
   }
 
   try {
@@ -5008,9 +5162,9 @@ app.post("/api/test/seed", (req, res) => {
       }
     });
 
-    res.json({ status: "success", message: "Case study data seeded successfully." });
+    replyOnce(res)(200, { status: "success", message: "Case study data seeded successfully." });
   } catch (err: any) {
-    res.status(500).json({ error: "internal server error" });
+    replyOnce(res)(500, { error: "internal server error" });
   }
 });
 
@@ -5046,24 +5200,24 @@ app.post("/api/calendar/book", async (req: express.Request, res: express.Respons
 
   // Validate required fields
   if (!start_time || !end_time) {
-    return res.status(400).json({ error: "start_time and end_time are required" });
+    return replyOnce(res)(400, { error: "start_time and end_time are required" });
   }
 
   const startDate = new Date(start_time);
   const endDate = new Date(end_time);
 
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-    return res.status(400).json({ error: "Invalid date format" });
+    return replyOnce(res)(400, { error: "Invalid date format" });
   }
 
   if (endDate <= startDate) {
-    return res.status(400).json({ error: "End time must be after start time" });
+    return replyOnce(res)(400, { error: "End time must be after start time" });
   }
 
   // N5: Check prayer time conflict
   const prayerCheck = checkPrayerTimeConflict(startDate);
   if (prayerCheck.hasConflict) {
-    return res.status(400).json({
+    return replyOnce(res)(400, {
       error: "prayer_time_conflict",
       prayer: prayerCheck.prayer,
       suggested_time: prayerCheck.suggestedTime,
@@ -5095,9 +5249,9 @@ app.post("/api/calendar/book", async (req: express.Request, res: express.Respons
       `You have a meeting scheduled with ${leadName} on ${formattedDate}.\n\n${summary || ''}\n\nLead ID: ${lead_id}`
     );
 
-    res.json({ status: "ok", message: "Booking confirmed and confirmation emails queued." });
+    replyOnce(res)(200, { status: "ok", message: "Booking confirmed and confirmation emails queued." });
   } catch (error: any) {
-    res.status(500).json({ error: "internal server error" });
+    replyOnce(res)(500, { error: "internal server error" });
   }
 });
 
@@ -5190,16 +5344,16 @@ app.get("/api/utils/hijri", (req, res) => {
   try {
     const gregDate = date ? new Date(date as string) : new Date();
     if (isNaN(gregDate.getTime())) {
-      return res.status(400).json({ error: "Invalid date format" });
+      return replyOnce(res)(400, { error: "Invalid date format" });
     }
     const hijri = gregorianToHijri(gregDate);
-    res.json({
+    replyOnce(res)(200, {
       hijri: `${hijri.year}/${hijri.month}/${hijri.day}`,
       formatted: hijri.formatted,
       gregorian: gregDate.toISOString()
     });
   } catch (error: any) {
-    res.status(500).json({ error: "internal server error" });
+    replyOnce(res)(500, { error: "internal server error" });
   }
 });
 
@@ -5209,9 +5363,9 @@ app.get("/api/services", (req, res) => {
   if (!user) return;
   try {
     const services = db.prepare("SELECT * FROM service_catalog WHERE user_id = ? ORDER BY created_at DESC").all(user.id);
-    res.json(services);
+    replyOnce(res)(200, services);
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch services" });
+    replyOnce(res)(500, { error: "Failed to fetch services" });
   }
 });
 
@@ -5219,13 +5373,13 @@ app.post("/api/services", (req, res) => {
   const user = requireAuth(req, res);
   if (!user) return;
   const { name, description, base_price, currency, category } = req.body;
-  if (!name) return res.status(400).json({ error: "name is required" });
+  if (!name) return replyOnce(res)(400, { error: "name is required" });
   try {
     const info = db.prepare("INSERT INTO service_catalog (user_id, name, description, base_price, currency, category) VALUES (?, ?, ?, ?, ?, ?)")
       .run(user.id, name, description || '', base_price || 0, currency || 'SAR', category || '');
-    res.json({ id: info.lastInsertRowid, name, description, base_price, currency, category });
+    replyOnce(res)(200, { id: info.lastInsertRowid, name, description, base_price, currency, category });
   } catch (error) {
-    res.status(500).json({ error: "Failed to create service" });
+    replyOnce(res)(500, { error: "Failed to create service" });
   }
 });
 
@@ -5236,10 +5390,10 @@ app.put("/api/services/:id", (req, res) => {
   try {
     const result = db.prepare("UPDATE service_catalog SET name = ?, description = ?, base_price = ?, currency = ?, category = ? WHERE id = ? AND user_id = ?")
       .run(name, description, base_price, currency, category, req.params.id, user.id);
-    if (result.changes === 0) return res.status(404).json({ error: "Service not found" });
-    res.json({ success: true });
+    if (result.changes === 0) return replyOnce(res)(404, { error: "Service not found" });
+    replyOnce(res)(200, { success: true });
   } catch (error) {
-    res.status(500).json({ error: "Failed to update service" });
+    replyOnce(res)(500, { error: "Failed to update service" });
   }
 });
 
@@ -5248,10 +5402,10 @@ app.delete("/api/services/:id", (req, res) => {
   if (!user) return;
   try {
     const result = db.prepare("DELETE FROM service_catalog WHERE id = ? AND user_id = ?").run(req.params.id, user.id);
-    if (result.changes === 0) return res.status(404).json({ error: "Service not found" });
-    res.json({ success: true });
+    if (result.changes === 0) return replyOnce(res)(404, { error: "Service not found" });
+    replyOnce(res)(200, { success: true });
   } catch (error) {
-    res.status(500).json({ error: "Failed to delete service" });
+    replyOnce(res)(500, { error: "Failed to delete service" });
   }
 });
 
@@ -5267,7 +5421,7 @@ app.post("/api/quotations/suggest-price", async (req, res) => {
   const cacheKey = `${service_name}:${lead_industry}:${lead_country}`;
   const cached = priceSuggestionCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < PRICE_CACHE_TTL) {
-    return res.json({ ...cached.result, cached: true });
+    return replyOnce(res)(200, { ...cached.result, cached: true });
   }
 
 
@@ -5310,10 +5464,10 @@ Return ONLY a JSON object in this exact format:
     // Cache result
     priceSuggestionCache.set(cacheKey, { result, timestamp: Date.now() });
 
-    res.json({ ...result, cached: false });
+    replyOnce(res)(200, { ...result, cached: false });
   } catch (error: any) {
     console.error("[AI Price Suggestion] Error:", error.message);
-    return providerErrorResponse(res, error, "Failed to generate price suggestion");
+    return replyOnce(res)(500, providerErrorResponse(res, error, "Failed to generate price suggestion"));
   }
 });
 
@@ -5377,12 +5531,12 @@ app.get("/api/analytics/stats", (req, res) => {
 // --- Unsubscribe Endpoint ---
 app.post("/api/unsubscribe", (req, res) => {
   const { email, token } = req.body;
-  if (!email || !token) return res.status(400).json({ error: "email and token required" });
+  if (!email || !token) return replyOnce(res)(400, { error: "email and token required" });
 
   // Verify HMAC-based unsubscribe token
   const expectedToken = createHmac('sha256', process.env.LEADJIN_ADMIN_SECRET || 'leadjin-unsubscribe-fallback').update(email).digest('hex').slice(0, 16);
   if (token !== expectedToken) {
-    return res.status(400).json({ error: "Invalid unsubscribe token" });
+    return replyOnce(res)(400, { error: "Invalid unsubscribe token" });
   }
 
   // Mark lead as do_not_contact (add column if not exists)
@@ -5401,7 +5555,7 @@ app.post("/api/unsubscribe", (req, res) => {
   // Suppression is address-keyed: this also blocks a future address with no lead row.
   suppress(db, email, 'unsubscribed', 'unsubscribe_post');
 
-  res.json({ status: "ok", message: "You have been unsubscribed." });
+  replyOnce(res)(200, { status: "ok", message: "You have been unsubscribed." });
 });
 
 // --- Email Tracking Endpoints ---
@@ -5426,7 +5580,7 @@ app.get("/api/email/track/:id/open", (req, res) => {
   // Return 1x1 transparent PNG
   res.set('Content-Type', 'image/png');
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.send(TRACKING_PIXEL);
+  replyOnceSend(res)(200, TRACKING_PIXEL);
 });
 
 // Track email click and redirect
@@ -5559,13 +5713,13 @@ app.post("/api/whatsapp/send", async (req, res) => {
 
   const { lead_id, message, type = 'text', templateName, templateParams } = req.body;
   if (!lead_id || !message) {
-    return res.status(400).json({ error: 'lead_id and message are required' });
+    return replyOnce(res)(400, { error: 'lead_id and message are required' });
   }
 
   // Look up lead's phone
   const lead = db.prepare("SELECT lead_id, name, phone FROM leads WHERE lead_id = ? AND user_id = ?").get(lead_id, user.id) as any;
-  if (!lead) return res.status(404).json({ error: 'lead not found' });
-  if (!lead.phone) return res.status(400).json({ error: 'lead has no phone number' });
+  if (!lead) return replyOnce(res)(404, { error: 'lead not found' });
+  if (!lead.phone) return replyOnce(res)(400, { error: 'lead has no phone number' });
 
   // The QR bridge is the WhatsApp transport — no Business-API credentials and
   // no template path here. Plain text is sent to the linked personal number.
@@ -5581,15 +5735,15 @@ app.post("/api/whatsapp/send", async (req, res) => {
     });
     const result = await outbound.json();
     if (!outbound.ok) {
-      return res.status(502).json({ error: result.error || 'Bridge send failed' });
+      return replyOnce(res)(502, { error: result.error || 'Bridge send failed' });
     }
     // The bridge owns the message store (bounded in-memory); do not duplicate
     // the Business-API 'whatsapp_messages' / 'activity_log' log here.
     const messageId = result.messageId || (Array.isArray(result.messageIds) && result.messageIds.length > 0 ? result.messageIds[result.messageIds.length - 1] : undefined);
-    res.json({ status: 'sent', messageId });
+    replyOnce(res)(200, { status: 'sent', messageId });
   } catch (err) {
     console.error('[WhatsApp Bridge send] error:', err);
-    res.status(503).json({ error: 'WhatsApp bridge unavailable' });
+    replyOnce(res)(503, { error: 'WhatsApp bridge unavailable' });
   }
 });
 
@@ -6011,12 +6165,12 @@ app.post("/api/signals/detect", async (req, res) => {
 
   if (lead_id && !company) {
     const lead = db.prepare("SELECT company FROM leads WHERE lead_id = ? AND user_id = ?").get(lead_id, user.id) as any;
-    if (!lead) return res.status(404).json({ error: "Lead not found" });
+    if (!lead) return replyOnce(res)(404, { error: "Lead not found" });
     company = lead.company;
   }
 
   if (!company) {
-    return res.status(400).json({ error: "Provide lead_id or company" });
+    return replyOnce(res)(400, { error: "Provide lead_id or company" });
   }
 
   try {
@@ -6028,10 +6182,10 @@ app.post("/api/signals/detect", async (req, res) => {
       ? db.prepare("SELECT * FROM intent_signals WHERE lead_id = ? AND user_id = ? ORDER BY detected_at DESC LIMIT 50").all(resolvedLeadId, user.id)
       : db.prepare("SELECT * FROM intent_signals WHERE company = ? AND user_id = ? ORDER BY detected_at DESC LIMIT 50").all(company, user.id);
 
-    res.json({ signals: stored, detected: signals.length, inserted });
+    replyOnce(res)(200, { signals: stored, detected: signals.length, inserted });
   } catch (e: any) {
     console.error('[Signals] detect error:', (e as Error).message);
-    res.status(500).json({ error: "Failed to detect signals", });
+    replyOnce(res)(500, { error: "Failed to detect signals", });
   }
 });
 
@@ -6088,10 +6242,10 @@ app.get("/api/leads/pipeline", (req, res) => {
   try {
     const pipeline = getLeadPipeline(user.id);
     const metrics = getPipelineMetrics(user.id);
-    res.json({ pipeline, metrics });
+    replyOnce(res)(200, { pipeline, metrics });
   } catch (error: any) {
     console.error('[IntelligenceHub] Pipeline error:', error.message);
-    res.status(500).json({ error: "Failed to fetch pipeline" });
+    replyOnce(res)(500, { error: "Failed to fetch pipeline" });
   }
 });
 
@@ -6105,15 +6259,15 @@ app.get("/api/leads/:id/score", (req, res) => {
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
-    return res.status(404).json({ error: "Lead not found" });
+    return replyOnce(res)(404, { error: "Lead not found" });
   }
 
   try {
     const score = getLeadScore(id);
-    res.json({ lead_id: id, score });
+    replyOnce(res)(200, { lead_id: id, score });
   } catch (error: any) {
     console.error('[IntelligenceHub] Score error:', error.message);
-    res.status(500).json({ error: "Failed to calculate score" });
+    replyOnce(res)(500, { error: "Failed to calculate score" });
   }
 });
 
@@ -6128,15 +6282,15 @@ app.put("/api/leads/:id/intelligence", async (req, res) => {
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
-    return res.status(404).json({ error: "Lead not found" });
+    return replyOnce(res)(404, { error: "Lead not found" });
   }
 
   try {
     const updatedLead = await updateLeadIntelligence(id, intelligenceData);
-    res.json({ status: "ok", lead: updatedLead });
+    replyOnce(res)(200, { status: "ok", lead: updatedLead });
   } catch (error: any) {
     console.error('[IntelligenceHub] Update error:', error.message);
-    res.status(500).json({ error: "Failed to update intelligence", });
+    replyOnce(res)(500, { error: "Failed to update intelligence", });
   }
 });
 
@@ -6151,15 +6305,15 @@ app.post("/api/leads/:id/hunt-process", async (req, res) => {
   // Verify lead belongs to user
   const lead = db.prepare("SELECT * FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
-    return res.status(404).json({ error: "Lead not found" });
+    return replyOnce(res)(404, { error: "Lead not found" });
   }
 
   try {
     const processed = await processHuntResult(id, huntResult, options);
-    res.json({ status: "ok", lead: processed });
+    replyOnce(res)(200, { status: "ok", lead: processed });
   } catch (error: any) {
     console.error('[IntelligenceHub] Hunt process error:', error.message);
-    res.status(500).json({ error: "Failed to process hunt result", });
+    replyOnce(res)(500, { error: "Failed to process hunt result", });
   }
 });
 
@@ -6174,15 +6328,15 @@ app.post("/api/leads/:id/outreach-sent", async (req, res) => {
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
-    return res.status(404).json({ error: "Lead not found" });
+    return replyOnce(res)(404, { error: "Lead not found" });
   }
 
   try {
     await processOutreachSent(id, craftedOutreach, user.id);
-    res.json({ status: "ok", message: "Outreach tracked" });
+    replyOnce(res)(200, { status: "ok", message: "Outreach tracked" });
   } catch (error: any) {
     console.error('[IntelligenceHub] Outreach tracking error:', error.message);
-    res.status(500).json({ error: "Failed to track outreach", });
+    replyOnce(res)(500, { error: "Failed to track outreach", });
   }
 });
 
@@ -6197,15 +6351,15 @@ app.post("/api/leads/:id/reply-received", async (req, res) => {
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
-    return res.status(404).json({ error: "Lead not found" });
+    return replyOnce(res)(404, { error: "Lead not found" });
   }
 
   try {
     await processReplyReceived(id, classification, replyBody);
-    res.json({ status: "ok", message: "Reply processed", classification: classification.category });
+    replyOnce(res)(200, { status: "ok", message: "Reply processed", classification: classification.category });
   } catch (error: any) {
     console.error('[IntelligenceHub] Reply processing error:', error.message);
-    res.status(500).json({ error: "Failed to process reply", });
+    replyOnce(res)(500, { error: "Failed to process reply", });
   }
 });
 
@@ -6220,15 +6374,15 @@ app.post("/api/leads/:id/vision-alignment", async (req, res) => {
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
-    return res.status(404).json({ error: "Lead not found" });
+    return replyOnce(res)(404, { error: "Lead not found" });
   }
 
   try {
     await updateVisionAlignment(id, { score, primaryProgram, secondaryPrograms, reasoning });
-    res.json({ status: "ok", message: "Vision alignment updated" });
+    replyOnce(res)(200, { status: "ok", message: "Vision alignment updated" });
   } catch (error: any) {
     console.error('[IntelligenceHub] Vision alignment error:', error.message);
-    res.status(500).json({ error: "Failed to update vision alignment", });
+    replyOnce(res)(500, { error: "Failed to update vision alignment", });
   }
 });
 
@@ -6239,10 +6393,10 @@ app.get("/api/intelligence/metrics", (req, res) => {
 
   try {
     const metrics = getPipelineMetrics(user.id);
-    res.json(metrics);
+    replyOnce(res)(200, metrics);
   } catch (error: any) {
     console.error('[IntelligenceHub] Metrics error:', error.message);
-    res.status(500).json({ error: "Failed to fetch metrics", });
+    replyOnce(res)(500, { error: "Failed to fetch metrics", });
   }
 });
 
@@ -6303,7 +6457,7 @@ Provide brief analysis in JSON: { "hotLead": boolean, "keyInsight": string, "pri
       }
     }
 
-    res.json({
+    replyOnce(res)(200, {
       lead_id: id,
       score,
       engagement,
@@ -6316,7 +6470,7 @@ Provide brief analysis in JSON: { "hotLead": boolean, "keyInsight": string, "pri
     });
   } catch (error: any) {
     console.error('[IntelligenceHub] Lead score error:', error.message);
-    res.status(500).json({ error: "Failed to calculate lead score", });
+    replyOnce(res)(500, { error: "Failed to calculate lead score" });
   }
 });
 
@@ -6343,14 +6497,14 @@ app.post("/api/pipeline-view", (req, res) => {
       }),
     }));
 
-    res.json({
+    replyOnce(res)(200, {
       pipeline: enhancedPipeline,
       metrics,
       generated_at: new Date().toISOString(),
     });
   } catch (error: any) {
     console.error('[IntelligenceHub] Pipeline view error:', error.message);
-    res.status(500).json({ error: "Failed to fetch pipeline view", });
+    replyOnce(res)(500, { error: "Failed to fetch pipeline view", });
   }
 });
 
@@ -6406,25 +6560,25 @@ app.post("/api/relationship/:id/track", (req, res) => {
   const { events } = req.body;
 
   if (!Array.isArray(events)) {
-    return res.status(400).json({ error: "events array is required" });
+    return replyOnce(res)(400, { error: "events array is required" });
   }
 
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
-    return res.status(404).json({ error: "Lead not found" });
+    return replyOnce(res)(404, { error: "Lead not found" });
   }
 
   try {
     const history = trackRelationship(id, events);
-    res.json({
+    replyOnce(res)(200, {
       status: "ok",
       history,
       tracked_at: new Date().toISOString(),
     });
   } catch (error: any) {
     console.error('[IntelligenceHub] Track relationship error:', error.message);
-    res.status(500).json({ error: "Failed to track relationship", });
+    replyOnce(res)(500, { error: "Failed to track relationship", });
   }
 });
 
@@ -6438,14 +6592,14 @@ app.get("/api/relationship/:id/history", (req, res) => {
   // Verify lead belongs to user
   const lead = db.prepare("SELECT lead_id FROM leads WHERE lead_id = ? AND user_id = ?").get(id, user.id) as any;
   if (!lead) {
-    return res.status(404).json({ error: "Lead not found" });
+    return replyOnce(res)(404, { error: "Lead not found" });
   }
 
   try {
     const history = getRelationshipHistory(id);
     const engagement = calculateEngagementMetrics(id);
 
-    res.json({
+    replyOnce(res)(200, {
       lead_id: id,
       history,
       engagement,
@@ -6453,7 +6607,7 @@ app.get("/api/relationship/:id/history", (req, res) => {
     });
   } catch (error: any) {
     console.error('[IntelligenceHub] Get relationship history error:', error.message);
-    res.status(500).json({ error: "Failed to fetch relationship history", });
+    replyOnce(res)(500, { error: "Failed to fetch relationship history", });
   }
 });
 
@@ -6526,10 +6680,10 @@ app.post("/api/classify-reply", async (req, res) => {
       }
     }
 
-    res.json(result);
+    replyOnce(res)(200, result);
   } catch (error: any) {
     console.error('[ProtocolManager] Classification error:', error.message);
-    res.status(500).json({
+    replyOnce(res)(500, {
       error: "Failed to classify reply",
       // F-27: error detail intentionally omitted from response
       category: 'NOT_INTERESTED',

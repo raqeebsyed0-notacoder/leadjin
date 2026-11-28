@@ -40,3 +40,6 @@ __pycache__/
 
 # test auth cache (contains a session token; never tracked)
 tests/.auth-cache.json
+
+# generated proposal artifacts (HTML/PDF/DOCX), not source
+proposals/
