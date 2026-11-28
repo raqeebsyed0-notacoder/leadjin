@@ -2597,7 +2597,7 @@ function AppContent() {
             )}
             {/* Language Toggle Button */}
             <button
-              onClick={() => setLanguage(language === 'en' ? 'ar' : 'en')}
+              onClick={() => { const next = language === 'en' ? 'ar' : 'en'; i18n.setLocale(next); setLanguage(next); }}
               className="lang-toggle-btn flex items-center gap-1.5 px-3 py-1.5 glass rounded-full border border-app-border text-[10px] font-bold uppercase tracking-widest hover:bg-app-accent hover:text-app-bg transition-all shrink-0"
               title={language === 'en' ? 'Switch to Arabic' : 'التبديل إلى الإنجليزية'}
               aria-label={language === 'en' ? 'Switch to Arabic' : 'Switch to English'}
