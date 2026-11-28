@@ -33,6 +33,7 @@ export const DECISION_INBOX_TABLE = 'decision_inbox';
 export interface AutopilotRunRow {
   id: string;
   goal_id: string;
+  user_id: string | null;
   started_at: string;
   finished_at: string | null;
   status: 'running' | 'finished' | 'failed';
@@ -46,11 +47,20 @@ export interface AutopilotRunRow {
 export interface DecisionInboxRow {
   id: string;
   goal_id: string;
+  user_id: string | null;
   decision: string;
   choice: string | null;
   created_at: string;
   resolved_at: string | null;
   resolved_by: string | null;
+}
+
+/** Add a column to an existing table only when it is missing (legacy DBs). */
+function addColumnIfMissing(db: Database.Database, table: string, column: string, type: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((entry) => entry.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
 }
 
 /** Idempotent schema for the run history table. Safe to call on every entry point. */
@@ -59,6 +69,7 @@ export function ensureAutopilotRunsSchema(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS autopilot_runs (
       id TEXT PRIMARY KEY,
       goal_id TEXT,
+      user_id TEXT,
       started_at TEXT,
       finished_at TEXT,
       status TEXT,
@@ -69,6 +80,7 @@ export function ensureAutopilotRunsSchema(db: Database.Database): void {
       latency_ms INTEGER
     );
   `);
+  addColumnIfMissing(db, AUTOPILOT_RUNS_TABLE, 'user_id', 'TEXT');
 }
 
 /** Idempotent schema for the irreversible-decision inbox. */
@@ -77,6 +89,7 @@ export function ensureDecisionInboxSchema(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS decision_inbox (
       id TEXT PRIMARY KEY,
       goal_id TEXT,
+      user_id TEXT,
       decision TEXT,
       choice TEXT,
       created_at TEXT,
@@ -84,6 +97,7 @@ export function ensureDecisionInboxSchema(db: Database.Database): void {
       resolved_by TEXT
     );
   `);
+  addColumnIfMissing(db, DECISION_INBOX_TABLE, 'user_id', 'TEXT');
 }
 
 /** Admit an irreversible decision into the inbox; the row leaves it
@@ -98,6 +112,7 @@ export function insertDecision(
   db: Database.Database,
   goalId: string,
   decision: string,
+  userId?: string | null,
 ): DecisionInboxRow {
   ensureDecisionInboxSchema(db);
   if (typeof goalId !== 'string' || goalId.trim().length === 0) {
@@ -109,28 +124,41 @@ export function insertDecision(
   const id = randomUUID();
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO decision_inbox (id, goal_id, decision, choice, created_at)
-     VALUES (?, ?, ?, NULL, ?)`,
-  ).run(id, goalId.trim(), decision.trim(), now);
+    `INSERT INTO decision_inbox (id, goal_id, user_id, decision, choice, created_at)
+     VALUES (?, ?, ?, ?, NULL, ?)`,
+  ).run(id, goalId.trim(), userId == null ? null : String(userId), decision.trim(), now);
   return getDecision(db, id)!;
 }
 
 /** Look up one stored run by id; undefined when no such row exists. */
-export function getRun(db: Database.Database, id: string): AutopilotRunRow | undefined {
-  return db.prepare('SELECT * FROM autopilot_runs WHERE id = ?').get(id) as
-    | AutopilotRunRow
-    | undefined;
+export function getRun(
+  db: Database.Database,
+  id: string,
+  userId?: string | null,
+): AutopilotRunRow | undefined {
+  if (userId === undefined) {
+    return db.prepare('SELECT * FROM autopilot_runs WHERE id = ?').get(id) as
+      | AutopilotRunRow
+      | undefined;
+  }
+  return db
+    .prepare('SELECT * FROM autopilot_runs WHERE id = ? AND user_id = ?')
+    .get(id, String(userId)) as AutopilotRunRow | undefined;
 }
 
 /** Record a new delegated job and return its product-visible row. */
-export function startRun(db: Database.Database, goalId: string): AutopilotRunRow {
+export function startRun(
+  db: Database.Database,
+  goalId: string,
+  userId?: string | null,
+): AutopilotRunRow {
   ensureAutopilotRunsSchema(db);
   const now = new Date().toISOString();
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO autopilot_runs (id, goal_id, started_at, status, produced, engines_used, errors, cost_usd, latency_ms)
-     VALUES (?, ?, ?, 'running', 0, '', '', 0, 0)`,
-  ).run(id, goalId, now);
+    `INSERT INTO autopilot_runs (id, goal_id, user_id, started_at, status, produced, engines_used, errors, cost_usd, latency_ms)
+     VALUES (?, ?, ?, ?, 'running', 0, '', '', 0, 0)`,
+  ).run(id, goalId, userId == null ? null : String(userId), now);
   return getRun(db, id)!;
 }
 
@@ -169,11 +197,21 @@ export function finishRun(
 }
 
 /** Bounded read-back of a goal's run history, newest first. */
-export function listRuns(db: Database.Database, goalId: string, limit: number = 50): AutopilotRunRow[] {
+export function listRuns(
+  db: Database.Database,
+  goalId: string,
+  limit: number = 50,
+  userId?: string | null,
+): AutopilotRunRow[] {
   ensureAutopilotRunsSchema(db);
+  if (userId === undefined) {
+    return db.prepare(
+      `SELECT * FROM autopilot_runs WHERE goal_id = ? ORDER BY started_at DESC, id DESC LIMIT ?`,
+    ).all(goalId, limit) as AutopilotRunRow[];
+  }
   return db.prepare(
-    `SELECT * FROM autopilot_runs WHERE goal_id = ? ORDER BY started_at DESC, id DESC LIMIT ?`,
-  ).all(goalId, limit) as AutopilotRunRow[];
+    `SELECT * FROM autopilot_runs WHERE goal_id = ? AND user_id = ? ORDER BY started_at DESC, id DESC LIMIT ?`,
+  ).all(goalId, String(userId), limit) as AutopilotRunRow[];
 }
 
 function getDecision(db: Database.Database, id: string): DecisionInboxRow | undefined {
@@ -183,12 +221,24 @@ function getDecision(db: Database.Database, id: string): DecisionInboxRow | unde
 }
 
 /** Unresolved decisions, oldest first. Pass goalId to filter by goal. */
-export function pendingDecisions(db: Database.Database, goalId?: string): DecisionInboxRow[] {
+export function pendingDecisions(
+  db: Database.Database,
+  goalId?: string,
+  userId?: string | null,
+): DecisionInboxRow[] {
   ensureDecisionInboxSchema(db);
-  const sql = goalId
-    ? `SELECT * FROM decision_inbox WHERE goal_id = ? AND resolved_at IS NULL ORDER BY created_at ASC, id ASC`
-    : `SELECT * FROM decision_inbox WHERE resolved_at IS NULL ORDER BY created_at ASC, id ASC`;
-  return goalId ? (db.prepare(sql).all(goalId) as DecisionInboxRow[]) : (db.prepare(sql).all() as DecisionInboxRow[]);
+  const clauses: string[] = ['resolved_at IS NULL'];
+  const params: string[] = [];
+  if (goalId) {
+    clauses.push('goal_id = ?');
+    params.push(goalId);
+  }
+  if (userId !== undefined) {
+    clauses.push('user_id = ?');
+    params.push(String(userId));
+  }
+  const sql = `SELECT * FROM decision_inbox WHERE ${clauses.join(' AND ')} ORDER BY created_at ASC, id ASC`;
+  return db.prepare(sql).all(...params) as DecisionInboxRow[];
 }
 
 /**
@@ -199,14 +249,19 @@ export function resolveDecision(
   db: Database.Database,
   id: string,
   choice: string,
+  userId?: string | null,
 ): { ok: true; row: DecisionInboxRow } | { ok: false; reason: string } {
   ensureDecisionInboxSchema(db);
   if (typeof choice !== 'string' || choice.trim().length === 0) {
     return { ok: false, reason: 'empty_choice' };
   }
-  const info = db.prepare(
-    `UPDATE decision_inbox SET resolved_at = ?, resolved_by = 'system', choice = ? WHERE id = ?`,
-  ).run(new Date().toISOString(), choice.trim(), id);
+  const info = userId === undefined
+    ? db.prepare(
+        `UPDATE decision_inbox SET resolved_at = ?, resolved_by = 'system', choice = ? WHERE id = ?`,
+      ).run(new Date().toISOString(), choice.trim(), id)
+    : db.prepare(
+        `UPDATE decision_inbox SET resolved_at = ?, resolved_by = 'system', choice = ? WHERE id = ? AND user_id = ?`,
+      ).run(new Date().toISOString(), choice.trim(), id, String(userId));
   if ((info as { changes: number }).changes === 0) {
     return { ok: false, reason: 'unknown_decision' };
   }

@@ -7286,7 +7286,7 @@ app.post('/api/autopilot/tick', (req, res) => {
   if (!checked.ok) return res.status(400).json({ error: 'invalid_goal', reason: ('reason' in checked ? checked.reason : 'invalid_goal') });
   const goal = checked.goal;
   const result = tickScheduler(goal, new Date());
-  const run = startRun(db, goal.id);
+  const run = startRun(db, goal.id, String(user.id));
   const report = beginRunReport('autopilot-tick');
   const delegated: string[] = [];
   const skipped: string[] = [];
@@ -7311,25 +7311,25 @@ app.get('/api/autopilot/decisions', (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
   const goalId = String(req.query.goal_id ?? '');
-  res.json(pendingDecisions(db, goalId || undefined));
+  res.json(pendingDecisions(db, goalId || undefined, String(user.id)));
 });
 app.post('/api/autopilot/decisions/resolve', (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
   const { id, choice } = req.body ?? {};
-  res.json(resolveDecision(db, String(id ?? ''), String(choice ?? '')));
+  res.json(resolveDecision(db, String(id ?? ''), String(choice ?? ''), String(user.id)));
 });
 app.get('/api/autopilot/runs', (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
   const goalId = String(req.query.goal_id ?? '');
   const limit = Number(req.query.limit ?? 50);
-  res.json(listRuns(db, goalId, Number.isFinite(limit) ? limit : 50));
+  res.json(listRuns(db, goalId, Number.isFinite(limit) ? limit : 50, String(user.id)));
 });
 app.get('/api/autopilot/runs/:id', (req, res) => {
   const user = requireAuth(req, res) as any;
   if (!user) return;
-  const run = getRun(db, String(req.params.id ?? ''));
+  const run = getRun(db, String(req.params.id ?? ''), String(user.id));
   if (!run) return res.status(404).json({ error: 'run_not_found' });
   res.json(run);
 });
