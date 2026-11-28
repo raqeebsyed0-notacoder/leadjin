@@ -167,8 +167,8 @@ export interface OrchestrateResult {
  * English marketing tails.
  *
  * Pure function — no network, no DB. */
-export function normalizeCompanyName(raw: string): string {
-  const trimmed = raw.trim();
+export function normalizeCompanyName(raw?: string | null): string {
+  const trimmed = (raw ?? '').trim();
   if (!trimmed) return trimmed;
 
   // 1) Split into candidate segments on pipes, dash separators (" - ", "–",
