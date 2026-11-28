@@ -45,10 +45,23 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // The `laya_decision` block lives in the harness config next to the repo root.
-// Resolved relative to this file so the contract does not hard-code an absolute
-// path that breaks if the tree moves.
-const _REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const _CONFIG_PATH = resolve(_REPO_ROOT, '.hermes', 'config.yaml');
+// The tree can be checked out flat (repo root = app) or one-repo (app/ under
+// the repo root), so search the nearest candidates and let an explicit
+// LEADJIN_HARNESS_CONFIG override win. Same config in every layout, no
+// hard-coded absolute path.
+function resolveHarnessConfigPath(): string {
+  const explicit = process.env.LEADJIN_HARNESS_CONFIG;
+  if (explicit && existsSync(explicit)) return explicit;
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(here, '..', '..', '.hermes', 'config.yaml'),
+    resolve(here, '..', '..', '..', '.hermes', 'config.yaml'),
+    resolve(here, '..', '..', '..', '..', '.hermes', 'config.yaml'),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
+const _CONFIG_PATH = resolveHarnessConfigPath();
 
 export type LayaDecision = {
   choice: string;
