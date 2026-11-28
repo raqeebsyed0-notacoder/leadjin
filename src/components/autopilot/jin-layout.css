@@ -55,3 +55,19 @@
 @media (max-width: 640px) {
   .jin-dock-host .jin-transcript { max-block-size: 7rem; }
 }
+
+/* B (follow-up, parent 2026-11-28): the Ask Jin chat dock is a floating host
+   outside <main>, so it still covered the lower cards. Reserve room at the end
+   of the scroll container while it is open, and cap its height, so every card
+   can be scrolled clear of it at 1440x900 and 390x1400. */
+.askjin-open main {
+  padding-block-end: 24rem;
+}
+.jin-chat-host {
+  max-block-size: 60vh;
+}
+@media (max-width: 640px) {
+  .askjin-open main { padding-block-end: 20rem; }
+  .jin-chat-host { max-block-size: 55vh; }
+}
+
