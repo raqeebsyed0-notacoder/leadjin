@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "test": "vitest run",
+    "test:isolated": "API_URL=http://localhost:3456 vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "cap:init": "npx cap init LeadJin com.leadjin.app --web-dir=dist",

@@ -40,6 +40,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
+// Autopilot v1: brain-slot descriptions are owned by the F3 module.
+import { describeBrainSlot } from './brainSlot.js';
 
 // ---------------------------------------------------------------------------
 // Provider configuration
@@ -801,7 +803,7 @@ export function getGenAI(userApiKey?: string): GenAIClient {
 
   // Gateway fail-safe: non-silent downgrade when the gateway key is absent.
   if (provider === PROVIDER_GATEWAY && !getGatewayApiKey()) {
-    console.error('[genaiClient] LEADJIN_PROVIDER=gateway requires API_SERVER_KEY, falling back to local ollama');
+    console.error(`[genaiClient] LEADJIN_PROVIDER=gateway requires API_SERVER_KEY, falling back to local ollama (brain slot: ${describeBrainSlot().provider})`);
     return {
       models: {
         async generateContent(params: { model?: string; contents: unknown; config?: Record<string, unknown> }): Promise<GenAIResult> {
