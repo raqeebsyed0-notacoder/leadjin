@@ -54,7 +54,7 @@ const EMPTY_VIEW: HuntView = {
 
 const COPY = {
   en: {
-    title: 'Jin is working',
+    title: 'Jin status',
     subtitle: 'Live hunt progress',
     open: 'Open Jin live progress',
     close: 'Close live progress',
@@ -72,7 +72,7 @@ const COPY = {
     emptyLog: 'Steps appear here as the hunt runs.',
   },
   ar: {
-    title: 'جين يعمل الآن',
+    title: 'حالة جين',
     subtitle: 'تقدم البحث المباشر',
     open: 'فتح تقدم جين المباشر',
     close: 'إغلاق التقدم المباشر',
